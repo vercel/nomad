@@ -837,6 +837,12 @@ type JobListRequest struct {
 	Fields *JobStubFields
 }
 
+// JobAllocationsRequest is used to parameterize a job allocations request
+type JobAllocationsRequest struct {
+	JobSpecificRequest
+	Fields *AllocStubFields
+}
+
 // Stub returns a summarized version of the job
 type JobStubFields struct {
 	Meta bool
@@ -1022,6 +1028,11 @@ type EvalSpecificRequest struct {
 	EvalID         string
 	IncludeRelated bool
 	QueryOptions
+}
+
+type EvalAllocationsRequest struct {
+	EvalSpecificRequest
+	Fields *AllocStubFields
 }
 
 // EvalAckRequest is used to Ack/Nack a specific evaluation
@@ -1434,6 +1445,13 @@ type DeploymentCancelRequest struct {
 type DeploymentSpecificRequest struct {
 	DeploymentID string
 	QueryOptions
+}
+
+// DeploymentAllocationsRequest is used to make a request specific to a particular
+// deployment allocations
+type DeploymentAllocationsRequest struct {
+	DeploymentSpecificRequest
+	Fields *AllocStubFields
 }
 
 // DeploymentFailRequest is used to fail a particular deployment

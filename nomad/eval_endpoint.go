@@ -866,7 +866,7 @@ func (e *Eval) Count(args *structs.EvalCountRequest, reply *structs.EvalCountRes
 }
 
 // Allocations is used to list the allocations for an evaluation
-func (e *Eval) Allocations(args *structs.EvalSpecificRequest,
+func (e *Eval) Allocations(args *structs.EvalAllocationsRequest,
 	reply *structs.EvalAllocationsResponse) error {
 
 	authErr := e.srv.Authenticate(e.ctx, args)
@@ -910,7 +910,7 @@ func (e *Eval) Allocations(args *structs.EvalSpecificRequest,
 
 				reply.Allocations = make([]*structs.AllocListStub, 0, len(allocs))
 				for _, alloc := range allocs {
-					reply.Allocations = append(reply.Allocations, alloc.Stub(nil))
+					reply.Allocations = append(reply.Allocations, alloc.Stub(args.Fields))
 				}
 			}
 

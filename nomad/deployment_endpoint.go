@@ -547,7 +547,7 @@ func (d *Deployment) List(args *structs.DeploymentListRequest, reply *structs.De
 }
 
 // Allocations returns the list of allocations that are a part of the deployment
-func (d *Deployment) Allocations(args *structs.DeploymentSpecificRequest, reply *structs.AllocListResponse) error {
+func (d *Deployment) Allocations(args *structs.DeploymentAllocationsRequest, reply *structs.AllocListResponse) error {
 	authErr := d.srv.Authenticate(d.ctx, args)
 	if done, err := d.srv.forward("Deployment.Allocations", args, args, reply); done {
 		return err
@@ -591,7 +591,7 @@ func (d *Deployment) Allocations(args *structs.DeploymentSpecificRequest, reply 
 
 			stubs := make([]*structs.AllocListStub, 0, len(allocs))
 			for _, alloc := range allocs {
-				stubs = append(stubs, alloc.Stub(nil))
+				stubs = append(stubs, alloc.Stub(args.Fields))
 			}
 			reply.Allocations = stubs
 

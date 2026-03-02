@@ -1546,7 +1546,7 @@ func (j *Job) List(args *structs.JobListRequest, reply *structs.JobListResponse)
 }
 
 // Allocations is used to list the allocations for a job
-func (j *Job) Allocations(args *structs.JobSpecificRequest,
+func (j *Job) Allocations(args *structs.JobAllocationsRequest,
 	reply *structs.JobAllocationsResponse) error {
 	authErr := j.srv.Authenticate(j.ctx, args)
 	if done, err := j.srv.forward("Job.Allocations", args, args, reply); done {
@@ -1586,7 +1586,7 @@ func (j *Job) Allocations(args *structs.JobSpecificRequest,
 			if len(allocs) > 0 {
 				reply.Allocations = make([]*structs.AllocListStub, 0, len(allocs))
 				for _, alloc := range allocs {
-					reply.Allocations = append(reply.Allocations, alloc.Stub(nil))
+					reply.Allocations = append(reply.Allocations, alloc.Stub(args.Fields))
 				}
 			}
 
