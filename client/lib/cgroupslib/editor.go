@@ -7,6 +7,7 @@ package cgroupslib
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,6 +103,7 @@ func Factory(allocID, task string, cores bool) Lifecycle {
 	default:
 		return &lifeCG2{
 			dpath: pathCG2(allocID, task, cores),
+			task:  task,
 		}
 	}
 }
@@ -229,6 +231,7 @@ func (l *lifeCG1) paths() []string {
 
 type lifeCG2 struct {
 	dpath string
+	task  string
 }
 
 func (l *lifeCG2) edit() *editor {
@@ -240,7 +243,41 @@ func (l *lifeCG2) Setup() error {
 }
 
 func (l *lifeCG2) Teardown() error {
+	preserve, err := l.hasDelegatedHiveChildren()
+	if err != nil {
+		return err
+	}
+	if preserve {
+		return nil
+	}
 	return os.RemoveAll(l.dpath)
+}
+
+func (l *lifeCG2) hasDelegatedHiveChildren() (bool, error) {
+	const hiveTask = "run-cell"
+	if l.task != hiveTask || !strings.HasSuffix(filepath.Base(l.dpath), "."+hiveTask+".scope") {
+		return false, nil
+	}
+
+	entries, err := os.ReadDir(l.dpath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// These names are the delegated children created by Hive Box. Keep this
+		// list synchronized with internal/box/cgroup in the Hive repository.
+		switch entry.Name() {
+		case "manager", "firecracker", "network", "storage":
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (l *lifeCG2) Kill() error {
