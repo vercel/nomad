@@ -129,11 +129,20 @@ func (c *CoreScheduler) forceGC(eval *structs.Evaluation) error {
 }
 
 // jobGC is used to garbage collect eligible jobs.
-func (c *CoreScheduler) jobGC(eval *structs.Evaluation, customThreshold *time.Duration) error {
+func (c *CoreScheduler) jobGC(eval *structs.Evaluation, customThreshold *time.Duration) (err error) {
+	telemetry := newJobGCTelemetry(eval.JobID)
+	telemetry.runStarted()
+	defer func() {
+		telemetry.emit(err)
+	}()
+
 	// Get all the jobs eligible for garbage collection.
+	scanStart := time.Now()
 	ws := memdb.NewWatchSet()
 	iter, err := c.snap.JobsByGC(ws, true)
 	if err != nil {
+		telemetry.errorPhase = jobGCPhaseScan
+		telemetry.measurePhaseSince(jobGCPhaseScan, scanStart)
 		return err
 	}
 
@@ -154,10 +163,12 @@ func (c *CoreScheduler) jobGC(eval *structs.Evaluation, customThreshold *time.Du
 OUTER:
 	for i := iter.Next(); i != nil; i = iter.Next() {
 		job := i.(*structs.Job)
+		telemetry.examineJob(job)
 
 		// Ignore new jobs.
 		st := time.Unix(0, job.SubmitTime)
 		if st.After(cutoffTime) {
+			telemetry.retainJob(jobGCRetainTooYoung)
 			continue
 		}
 
@@ -165,20 +176,25 @@ OUTER:
 		evals, err := c.snap.EvalsByJob(ws, job.Namespace, job.ID)
 		if err != nil {
 			c.logger.Error("job GC failed to get evals for job", "job", job.ID, "error", err)
+			telemetry.retainJob(jobGCRetainEvalLookupError)
 			continue
 		}
 
 		allEvalsGC := true
+		retainReason := ""
 		var jobAlloc, jobEval []string
 		for _, eval := range evals {
+			telemetry.examineEval(eval)
 			gc, allocs, err := c.gcEval(eval, cutoffTime, true)
 			if err != nil {
+				telemetry.retainJob(jobGCRetainEvalError)
 				continue OUTER
 			} else if gc {
 				jobEval = append(jobEval, eval.ID)
 				jobAlloc = append(jobAlloc, allocs...)
 			} else {
 				allEvalsGC = false
+				retainReason = classifyIneligibleEval(eval, cutoffTime)
 				break
 			}
 		}
@@ -189,19 +205,27 @@ OUTER:
 			versions, err := c.snap.JobVersionsByID(ws, job.Namespace, job.ID)
 			if err != nil {
 				c.logger.Error("job GC failed to get versions for job", "job", job.ID, "error", err)
+				telemetry.retainJob(jobGCRetainVersionLookupError)
 				continue
 			}
 			for _, v := range versions {
 				if v.VersionTag != nil {
+					telemetry.retainJob(jobGCRetainVersionTagged)
 					continue OUTER
 				}
 			}
 			gcJob = append(gcJob, job)
 			gcAlloc = append(gcAlloc, jobAlloc...)
 			gcEval = append(gcEval, jobEval...)
+		} else {
+			telemetry.retainJob(retainReason)
 		}
 
 	}
+	telemetry.measurePhaseSince(jobGCPhaseScan, scanStart)
+	telemetry.jobsEligible = len(gcJob)
+	telemetry.evalsEligible = len(gcEval)
+	telemetry.allocsEligible = len(gcAlloc)
 
 	// Fast-path the nothing case
 	if len(gcEval) == 0 && len(gcAlloc) == 0 && len(gcJob) == 0 {
@@ -212,12 +236,28 @@ OUTER:
 		"jobs", len(gcJob), "evals", len(gcEval), "allocs", len(gcAlloc))
 
 	// Reap the evals and allocs
+	telemetry.evalReapRequests = partitionCount(len(gcEval)+len(gcAlloc), structs.MaxUUIDsPerWriteRequest)
+	evalReapStart := time.Now()
 	if err := c.evalReap(gcEval, gcAlloc); err != nil {
+		telemetry.errorPhase = jobGCPhaseEvalReap
+		telemetry.measurePhaseSince(jobGCPhaseEvalReap, evalReapStart)
 		return err
 	}
+	telemetry.measurePhaseSince(jobGCPhaseEvalReap, evalReapStart)
+	telemetry.evalsReaped = len(gcEval)
+	telemetry.allocsReaped = len(gcAlloc)
 
 	// Reap the jobs
-	return c.jobReap(gcJob, eval.LeaderACL)
+	telemetry.jobReapRequests = partitionCount(len(gcJob), jobGCReapBatchSize)
+	jobReapStart := time.Now()
+	err = c.jobReap(gcJob, eval.LeaderACL)
+	telemetry.measurePhaseSince(jobGCPhaseJobReap, jobReapStart)
+	if err != nil {
+		telemetry.errorPhase = jobGCPhaseJobReap
+		return err
+	}
+	telemetry.jobsReaped = len(gcJob)
+	return nil
 }
 
 // jobReap contacts the leader and issues a reap on the passed jobs
@@ -225,7 +265,7 @@ func (c *CoreScheduler) jobReap(jobs []*structs.Job, leaderACL string) error {
 	// Call to the leader to issue the reap with a batch size intended to be
 	// similar to the GC by batches of UUIDs for evals, allocs, and nodes
 	// (limited by structs.MaxUUIDsPerWriteRequest)
-	for _, req := range c.partitionJobReap(jobs, leaderACL, 2048) {
+	for _, req := range c.partitionJobReap(jobs, leaderACL, jobGCReapBatchSize) {
 		var resp structs.JobBatchDeregisterResponse
 		if err := c.srv.RPC(structs.JobBatchDeregisterRPCMethod, req, &resp); err != nil {
 			c.logger.Error("batch job reap failed", "error", err)
