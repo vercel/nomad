@@ -126,11 +126,14 @@ func (p *planner) planApply(maxPipelineDepth int) {
 	defer pool.Shutdown()
 
 	for {
+		loopStart := time.Now()
 		// Pull the next pending plan, exit if we are no longer leader
 		pending, err := p.planQueue.Dequeue(0)
 		if err != nil {
 			return
 		}
+
+		metrics.MeasureSince([]string{"nomad", "plan", "deque"}, loopStart)
 
 		// Drain all available plan completion indexes from the channel. Plans
 		// may write their completion to this channel out of order, so we track
@@ -184,6 +187,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 			if err != nil {
 				p.srv.logger.Error("failed to snapshot state", "error", err)
 				pending.respond(nil, err)
+				metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
 				continue
 			}
 		}
@@ -193,6 +197,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 		if err != nil {
 			p.srv.logger.Error("failed to evaluate plan", "error", err)
 			pending.respond(nil, err)
+			metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
 			continue
 		}
 
@@ -206,17 +211,20 @@ func (p *planner) planApply(maxPipelineDepth int) {
 		// Fast-path the response if there is nothing to do
 		if result.IsNoOp() {
 			pending.respond(result, nil)
+			metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
 			continue
 		}
 
 		// Apply backpressure to prevent dropping indexes because the future
 		// makes a non-blocking send; this never invalidates the snapshot
 		// because we want to optimistically update it instead
+		waitRaftStart := time.Now()
 		for inFlightPlans >= maxPipelineDepth {
 			idx := <-planIndexCh
 			inFlightPlans--
 			prevPlanResultIndex = max(prevPlanResultIndex, idx)
 		}
+		metrics.MeasureSince([]string{"nomad", "plan", "wait_raft"}, waitRaftStart)
 
 		// Dispatch the Raft transaction for the plan without blocking. This
 		// enables pipelining: multiple plans can be in-flight in the Raft
@@ -229,6 +237,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 		if err != nil {
 			p.srv.logger.Error("failed to submit plan", "error", err)
 			pending.respond(nil, err)
+			metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
 			continue
 		}
 
@@ -239,6 +248,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 		// channel for all in-flight plans, and the draining logic above handles
 		// collecting all completed indexes.
 		go p.asyncPlanWait(planIndexCh, future, result, pending)
+		metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
 	}
 }
 
@@ -304,6 +314,7 @@ func (p *planner) snapshotMinIndex(prevPlanResultIndex, planSnapshotIndex uint64
 func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap *state.StateSnapshot) (raft.ApplyFuture, error) {
 	now := time.Now().UTC()
 	unixNow := now.UnixNano()
+	defer metrics.MeasureSince([]string{"nomad", "plan", "applyPlan"}, now)
 
 	job := plan.Job
 	if job == nil {
@@ -452,26 +463,6 @@ func signAllocIdentities(signer claimSigner, job *structs.Job, allocations []*st
 	for _, alloc := range allocations {
 		if alloc.SignedIdentities == nil {
 			alloc.SignedIdentities = map[string]string{}
-		}
-		tg := job.LookupTaskGroup(alloc.TaskGroup)
-		for _, task := range tg.Tasks {
-			// skip tasks that already have an identity
-			if _, ok := alloc.SignedIdentities[task.Name]; ok {
-				continue
-			}
-			defaultWI := &structs.WorkloadIdentity{Name: "default"}
-
-			claims := structs.NewIdentityClaimsBuilder(
-				job, alloc, task.IdentityHandle(defaultWI), task.Identity, ns).
-				WithTask(task).
-				Build(now)
-
-			token, keyID, err := signer.SignClaims(claims)
-			if err != nil {
-				return err
-			}
-			alloc.SignedIdentities[task.Name] = token
-			alloc.SigningKeyID = keyID
 		}
 	}
 	return nil
