@@ -452,6 +452,31 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		}
 		conf.JobGCThreshold = dur
 	}
+	if configured := agentConfig.Server.JobGCEvalReapBatchSize; configured != nil {
+		batchSize := *configured
+		if batchSize < 0 {
+			return nil, fmt.Errorf("job_gc_eval_reap_batch_size must be nonnegative")
+		} else if batchSize > nomad.MaxJobGCEvalReapBatchSize {
+			return nil, fmt.Errorf("job_gc_eval_reap_batch_size must not exceed %d", nomad.MaxJobGCEvalReapBatchSize)
+		}
+		conf.JobGCEvalReapBatchSize = batchSize
+	}
+	if configured := agentConfig.Server.JobGCJobReapBatchSize; configured != nil {
+		batchSize := *configured
+		if batchSize < 0 {
+			return nil, fmt.Errorf("job_gc_job_reap_batch_size must be nonnegative")
+		} else if batchSize > nomad.MaxJobGCJobReapBatchSize {
+			return nil, fmt.Errorf("job_gc_job_reap_batch_size must not exceed %d", nomad.MaxJobGCJobReapBatchSize)
+		}
+		conf.JobGCJobReapBatchSize = batchSize
+	}
+	if configured := agentConfig.Server.JobGCReapRateLimit; configured != nil {
+		rateLimit := *configured
+		if rateLimit < 0 {
+			return nil, fmt.Errorf("job_gc_reap_rate_limit must be nonnegative")
+		}
+		conf.JobGCReapRateLimit = rateLimit
+	}
 	if gcThreshold := agentConfig.Server.EvalGCThreshold; gcThreshold != "" {
 		dur, err := time.ParseDuration(gcThreshold)
 		if err != nil {

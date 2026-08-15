@@ -30,6 +30,11 @@ const (
 	DefaultRegion   = "global"
 	DefaultDC       = "dc1"
 	DefaultSerfPort = 4648
+
+	DefaultJobGCEvalReapBatchSize = structs.MaxUUIDsPerWriteRequest
+	MaxJobGCEvalReapBatchSize     = DefaultJobGCEvalReapBatchSize
+	DefaultJobGCJobReapBatchSize  = 2048
+	MaxJobGCJobReapBatchSize      = DefaultJobGCJobReapBatchSize
 )
 
 func DefaultRPCAddr() *net.TCPAddr {
@@ -178,6 +183,18 @@ type Config struct {
 	// JobGCThreshold is how old a job must be before it eligible for GC. This gives
 	// the user time to inspect the job.
 	JobGCThreshold time.Duration
+
+	// JobGCEvalReapBatchSize limits the number of evaluation and allocation IDs
+	// reaped by each Job GC request. Zero uses DefaultJobGCEvalReapBatchSize.
+	JobGCEvalReapBatchSize int
+
+	// JobGCJobReapBatchSize limits the number of jobs reaped by each Job GC
+	// request. Zero uses DefaultJobGCJobReapBatchSize.
+	JobGCJobReapBatchSize int
+
+	// JobGCReapRateLimit limits Job GC reap requests per second. Zero disables
+	// rate limiting.
+	JobGCReapRateLimit float64
 
 	// NodeGCInterval is how often we dispatch a job to GC failed nodes.
 	NodeGCInterval time.Duration

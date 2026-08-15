@@ -149,6 +149,9 @@ func TestConfig_Merge(t *testing.T) {
 			NumSchedulers:          new(1),
 			NodeGCThreshold:        "1h",
 			BatchEvalGCThreshold:   "4h",
+			JobGCEvalReapBatchSize: new(128),
+			JobGCJobReapBatchSize:  new(64),
+			JobGCReapRateLimit:     new(10.5),
 			HeartbeatGrace:         30 * time.Second,
 			MinHeartbeatTTL:        30 * time.Second,
 			MaxHeartbeatsPerSecond: 30.0,
@@ -369,6 +372,9 @@ func TestConfig_Merge(t *testing.T) {
 			EnabledSchedulers:      []string{structs.JobTypeBatch},
 			NodeGCThreshold:        "12h",
 			BatchEvalGCThreshold:   "4h",
+			JobGCEvalReapBatchSize: new(512),
+			JobGCJobReapBatchSize:  new(256),
+			JobGCReapRateLimit:     new(20.5),
 			HeartbeatGrace:         2 * time.Minute,
 			MinHeartbeatTTL:        2 * time.Minute,
 			MaxHeartbeatsPerSecond: 200.0,
@@ -507,6 +513,41 @@ func TestConfig_Merge(t *testing.T) {
 	expected := c3.Copy()
 
 	must.Eq(t, expected, result)
+}
+
+func TestServerConfig_Merge_JobGCReapingExplicitZero(t *testing.T) {
+	base := &ServerConfig{
+		JobGCEvalReapBatchSize: new(128),
+		JobGCJobReapBatchSize:  new(64),
+		JobGCReapRateLimit:     new(50.0),
+	}
+	override := &ServerConfig{
+		JobGCEvalReapBatchSize: new(0),
+		JobGCJobReapBatchSize:  new(0),
+		JobGCReapRateLimit:     new(0.0),
+	}
+
+	got := base.Merge(override)
+	must.Eq(t, 0, *got.JobGCEvalReapBatchSize)
+	must.Eq(t, 0, *got.JobGCJobReapBatchSize)
+	must.Eq(t, 0.0, *got.JobGCReapRateLimit)
+}
+
+func TestServerConfig_Copy_JobGCReaping(t *testing.T) {
+	original := &ServerConfig{
+		JobGCEvalReapBatchSize: new(128),
+		JobGCJobReapBatchSize:  new(64),
+		JobGCReapRateLimit:     new(50.0),
+	}
+
+	copy := original.Copy()
+	*copy.JobGCEvalReapBatchSize = 256
+	*copy.JobGCJobReapBatchSize = 128
+	*copy.JobGCReapRateLimit = 25
+
+	must.Eq(t, 128, *original.JobGCEvalReapBatchSize)
+	must.Eq(t, 64, *original.JobGCJobReapBatchSize)
+	must.Eq(t, 50.0, *original.JobGCReapRateLimit)
 }
 
 func TestConfig_ParseConfigFile(t *testing.T) {

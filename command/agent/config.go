@@ -595,6 +595,18 @@ type ServerConfig struct {
 	// can be used to filter by age.
 	JobGCThreshold string `hcl:"job_gc_threshold"`
 
+	// JobGCEvalReapBatchSize controls the maximum number of evaluation and
+	// allocation IDs reaped by each Job GC request. Zero uses the default.
+	JobGCEvalReapBatchSize *int `hcl:"job_gc_eval_reap_batch_size"`
+
+	// JobGCJobReapBatchSize controls the maximum number of jobs reaped by each
+	// Job GC request. Zero uses the default.
+	JobGCJobReapBatchSize *int `hcl:"job_gc_job_reap_batch_size"`
+
+	// JobGCReapRateLimit limits Job GC reap requests per second. Zero disables
+	// rate limiting.
+	JobGCReapRateLimit *float64 `hcl:"job_gc_reap_rate_limit"`
+
 	// EvalGCThreshold controls how "old" an eval must be to be collected by GC.
 	// Age is not the only requirement for a eval to be GCed but the threshold
 	// can be used to filter by age. Please note that batch job evaluations are
@@ -825,6 +837,9 @@ func (s *ServerConfig) Copy() *ServerConfig {
 	ns := *s
 	ns.RaftMultiplier = pointer.Copy(s.RaftMultiplier)
 	ns.NumSchedulers = pointer.Copy(s.NumSchedulers)
+	ns.JobGCEvalReapBatchSize = pointer.Copy(s.JobGCEvalReapBatchSize)
+	ns.JobGCJobReapBatchSize = pointer.Copy(s.JobGCJobReapBatchSize)
+	ns.JobGCReapRateLimit = pointer.Copy(s.JobGCReapRateLimit)
 	ns.EnabledSchedulers = slices.Clone(s.EnabledSchedulers)
 	ns.StartJoin = slices.Clone(s.StartJoin)
 	ns.RetryJoin = slices.Clone(s.RetryJoin)
@@ -2657,6 +2672,15 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 	}
 	if b.JobGCThreshold != "" {
 		result.JobGCThreshold = b.JobGCThreshold
+	}
+	if b.JobGCEvalReapBatchSize != nil {
+		result.JobGCEvalReapBatchSize = new(*b.JobGCEvalReapBatchSize)
+	}
+	if b.JobGCJobReapBatchSize != nil {
+		result.JobGCJobReapBatchSize = new(*b.JobGCJobReapBatchSize)
+	}
+	if b.JobGCReapRateLimit != nil {
+		result.JobGCReapRateLimit = new(*b.JobGCReapRateLimit)
 	}
 	if b.JobDefaultPriority != nil {
 		result.JobDefaultPriority = new(*b.JobDefaultPriority)

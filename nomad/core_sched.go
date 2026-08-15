@@ -235,10 +235,12 @@ OUTER:
 	c.logger.Debug("job GC found eligible objects",
 		"jobs", len(gcJob), "evals", len(gcEval), "allocs", len(gcAlloc))
 
+	reapOptions := c.jobGCReapOptions()
+
 	// Reap the evals and allocs
-	telemetry.evalReapRequests = partitionCount(len(gcEval)+len(gcAlloc), structs.MaxUUIDsPerWriteRequest)
+	telemetry.evalReapRequests = partitionCount(len(gcEval)+len(gcAlloc), reapOptions.evalBatchSize)
 	evalReapStart := time.Now()
-	if err := c.evalReap(gcEval, gcAlloc); err != nil {
+	if err := c.evalReapBatched(gcEval, gcAlloc, reapOptions.evalBatchSize, reapOptions.limiter); err != nil {
 		telemetry.errorPhase = jobGCPhaseEvalReap
 		telemetry.measurePhaseSince(jobGCPhaseEvalReap, evalReapStart)
 		return err
@@ -247,10 +249,11 @@ OUTER:
 	telemetry.evalsReaped = len(gcEval)
 	telemetry.allocsReaped = len(gcAlloc)
 
-	// Reap the jobs
-	telemetry.jobReapRequests = partitionCount(len(gcJob), jobGCReapBatchSize)
+	// Reap the jobs using the same limiter so the phase boundary cannot start a
+	// second burst of writes.
+	telemetry.jobReapRequests = partitionCount(len(gcJob), reapOptions.jobBatchSize)
 	jobReapStart := time.Now()
-	err = c.jobReap(gcJob, eval.LeaderACL)
+	err = c.jobReap(gcJob, eval.LeaderACL, reapOptions.jobBatchSize, reapOptions.limiter)
 	telemetry.measurePhaseSince(jobGCPhaseJobReap, jobReapStart)
 	if err != nil {
 		telemetry.errorPhase = jobGCPhaseJobReap
@@ -260,12 +263,48 @@ OUTER:
 	return nil
 }
 
+type jobGCReapOptions struct {
+	evalBatchSize int
+	jobBatchSize  int
+	limiter       *rate.Limiter
+}
+
+func (c *CoreScheduler) jobGCReapOptions() jobGCReapOptions {
+	options := jobGCReapOptions{
+		evalBatchSize: DefaultJobGCEvalReapBatchSize,
+		jobBatchSize:  DefaultJobGCJobReapBatchSize,
+	}
+
+	if batchSize := c.srv.config.JobGCEvalReapBatchSize; batchSize > 0 {
+		options.evalBatchSize = min(batchSize, MaxJobGCEvalReapBatchSize)
+	}
+	if batchSize := c.srv.config.JobGCJobReapBatchSize; batchSize > 0 {
+		options.jobBatchSize = min(batchSize, MaxJobGCJobReapBatchSize)
+	}
+	if limit := c.srv.config.JobGCReapRateLimit; limit > 0 {
+		options.limiter = rate.NewLimiter(rate.Limit(limit), 1)
+	}
+
+	return options
+}
+
 // jobReap contacts the leader and issues a reap on the passed jobs
-func (c *CoreScheduler) jobReap(jobs []*structs.Job, leaderACL string) error {
+func (c *CoreScheduler) jobReap(
+	jobs []*structs.Job,
+	leaderACL string,
+	batchSize int,
+	limiter *rate.Limiter,
+) error {
 	// Call to the leader to issue the reap with a batch size intended to be
 	// similar to the GC by batches of UUIDs for evals, allocs, and nodes
 	// (limited by structs.MaxUUIDsPerWriteRequest)
-	for _, req := range c.partitionJobReap(jobs, leaderACL, jobGCReapBatchSize) {
+	for _, req := range c.partitionJobReap(jobs, leaderACL, batchSize) {
+		if limiter != nil {
+			if err := limiter.Wait(c.srv.shutdownCtx); err != nil {
+				return err
+			}
+		}
+
 		var resp structs.JobBatchDeregisterResponse
 		if err := c.srv.RPC(structs.JobBatchDeregisterRPCMethod, req, &resp); err != nil {
 			c.logger.Error("batch job reap failed", "error", err)
@@ -453,8 +492,22 @@ func olderVersionTerminalAllocs(allocs []*structs.Allocation, job *structs.Job, 
 // evalReap contacts the leader and issues a reap on the passed evals and
 // allocs.
 func (c *CoreScheduler) evalReap(evals, allocs []string) error {
+	return c.evalReapBatched(evals, allocs, DefaultJobGCEvalReapBatchSize, nil)
+}
+
+func (c *CoreScheduler) evalReapBatched(
+	evals, allocs []string,
+	batchSize int,
+	limiter *rate.Limiter,
+) error {
 	// Call to the leader to issue the reap
-	for _, req := range c.partitionEvalReap(evals, allocs, structs.MaxUUIDsPerWriteRequest) {
+	for _, req := range c.partitionEvalReap(evals, allocs, batchSize) {
+		if limiter != nil {
+			if err := limiter.Wait(c.srv.shutdownCtx); err != nil {
+				return err
+			}
+		}
+
 		var resp structs.GenericResponse
 		if err := c.srv.RPC("Eval.Reap", req, &resp); err != nil {
 			c.logger.Error("eval reap failed", "error", err)
