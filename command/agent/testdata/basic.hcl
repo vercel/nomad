@@ -126,6 +126,9 @@ server {
   node_gc_threshold             = "12h"
   job_gc_interval               = "3m"
   job_gc_threshold              = "12h"
+  job_gc_eval_reap_batch_size   = 512
+  job_gc_job_reap_batch_size    = 256
+  job_gc_reap_rate_limit        = 20.5
   eval_gc_threshold             = "12h"
   deployment_gc_threshold       = "12h"
   csi_volume_claim_gc_interval  = "3m"

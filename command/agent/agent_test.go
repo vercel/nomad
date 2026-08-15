@@ -185,6 +185,93 @@ func TestAgent_ServerConfig(t *testing.T) {
 	require.Equal(t, 3, out.BootstrapExpect)
 }
 
+func TestAgent_ServerConfig_JobGCReaping(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name          string
+		configured    bool
+		evalBatchSize int
+		jobBatchSize  int
+		rateLimit     float64
+		expectErr     string
+	}{
+		{
+			name: "defaults preserve current behavior",
+		},
+		{
+			name:       "explicit zeros preserve current behavior",
+			configured: true,
+		},
+		{
+			name:          "custom values",
+			configured:    true,
+			evalBatchSize: 512,
+			jobBatchSize:  256,
+			rateLimit:     20.5,
+		},
+		{
+			name:          "maximum batch sizes",
+			configured:    true,
+			evalBatchSize: nomad.MaxJobGCEvalReapBatchSize,
+			jobBatchSize:  nomad.MaxJobGCJobReapBatchSize,
+		},
+		{
+			name:          "negative eval batch size",
+			configured:    true,
+			evalBatchSize: -1,
+			expectErr:     "job_gc_eval_reap_batch_size must be nonnegative",
+		},
+		{
+			name:          "eval batch size above maximum",
+			configured:    true,
+			evalBatchSize: nomad.MaxJobGCEvalReapBatchSize + 1,
+			expectErr:     "job_gc_eval_reap_batch_size must not exceed 7281",
+		},
+		{
+			name:         "negative job batch size",
+			configured:   true,
+			jobBatchSize: -1,
+			expectErr:    "job_gc_job_reap_batch_size must be nonnegative",
+		},
+		{
+			name:         "job batch size above maximum",
+			configured:   true,
+			jobBatchSize: nomad.MaxJobGCJobReapBatchSize + 1,
+			expectErr:    "job_gc_job_reap_batch_size must not exceed 2048",
+		},
+		{
+			name:       "negative reap rate limit",
+			configured: true,
+			rateLimit:  -0.5,
+			expectErr:  "job_gc_reap_rate_limit must be nonnegative",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			conf := DevConfig(nil)
+			if tc.configured {
+				conf.Server.JobGCEvalReapBatchSize = new(tc.evalBatchSize)
+				conf.Server.JobGCJobReapBatchSize = new(tc.jobBatchSize)
+				conf.Server.JobGCReapRateLimit = new(tc.rateLimit)
+			}
+			must.NoError(t, conf.normalizeAddrs())
+
+			serverConf, err := convertServerConfig(conf)
+			if tc.expectErr != "" {
+				must.ErrorContains(t, err, tc.expectErr)
+				return
+			}
+
+			must.NoError(t, err)
+			must.Eq(t, tc.evalBatchSize, serverConf.JobGCEvalReapBatchSize)
+			must.Eq(t, tc.jobBatchSize, serverConf.JobGCJobReapBatchSize)
+			must.Eq(t, tc.rateLimit, serverConf.JobGCReapRateLimit)
+		})
+	}
+}
+
 func TestAgent_ServerConfig_SchedulerFlags(t *testing.T) {
 	ci.Parallel(t)
 

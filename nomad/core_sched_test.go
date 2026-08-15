@@ -1539,6 +1539,73 @@ func TestCoreScheduler_JobGC_Force(t *testing.T) {
 	}
 }
 
+func TestCoreScheduler_JobGC_ConfiguredReapBatches(t *testing.T) {
+	ci.Parallel(t)
+
+	server, cleanup := TestServer(t, nil)
+	defer cleanup()
+	testutil.WaitForLeader(t, server.RPC)
+
+	server.config.JobGCEvalReapBatchSize = 1
+	server.config.JobGCJobReapBatchSize = 1
+	server.config.JobGCReapRateLimit = 10_000
+
+	store := server.fsm.State()
+	var jobs []*structs.Job
+	var evals []*structs.Evaluation
+	var allocs []*structs.Allocation
+	for i := 0; i < 3; i++ {
+		job := mock.Job()
+		job.Status = structs.JobStatusDead
+		job.Stop = true
+		job.SubmitTime = time.Now().Add(-48 * time.Hour).UnixNano()
+		job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{}
+		must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, uint64(1000+i), nil, job))
+
+		eval := mock.Eval()
+		eval.JobID = job.ID
+		eval.Namespace = job.Namespace
+		eval.Status = structs.EvalStatusComplete
+		eval.CreateTime = time.Now().Add(-48 * time.Hour).UnixNano()
+		eval.ModifyTime = time.Now().Add(-47 * time.Hour).UnixNano()
+		must.NoError(t, store.UpsertEvals(structs.MsgTypeTestSetup, uint64(2000+i), []*structs.Evaluation{eval}))
+
+		alloc := mock.Alloc()
+		alloc.JobID = job.ID
+		alloc.Namespace = job.Namespace
+		alloc.EvalID = eval.ID
+		alloc.TaskGroup = job.TaskGroups[0].Name
+		alloc.DesiredStatus = structs.AllocDesiredStatusStop
+		alloc.ClientStatus = structs.AllocClientStatusComplete
+		alloc.CreateTime = time.Now().Add(-48 * time.Hour).UnixNano()
+		alloc.ModifyTime = time.Now().Add(-47 * time.Hour).UnixNano()
+		must.NoError(t, store.UpsertAllocs(structs.MsgTypeTestSetup, uint64(3000+i), []*structs.Allocation{alloc}))
+
+		jobs = append(jobs, job)
+		evals = append(evals, eval)
+		allocs = append(allocs, alloc)
+	}
+
+	snap, err := store.Snapshot()
+	must.NoError(t, err)
+	core := NewCoreScheduler(server, snap, nil)
+	must.NoError(t, core.Process(server.coreJobEval(structs.CoreJobJobGC, 4000)))
+
+	for i := range jobs {
+		job, err := store.JobByID(nil, jobs[i].Namespace, jobs[i].ID)
+		must.NoError(t, err)
+		must.Nil(t, job)
+
+		eval, err := store.EvalByID(nil, evals[i].ID)
+		must.NoError(t, err)
+		must.Nil(t, eval)
+
+		alloc, err := store.AllocByID(nil, allocs[i].ID)
+		must.NoError(t, err)
+		must.Nil(t, alloc)
+	}
+}
+
 // This test ensures parameterized jobs only get gc'd when stopped
 func TestCoreScheduler_JobGC_Parameterized(t *testing.T) {
 	ci.Parallel(t)
@@ -1951,6 +2018,42 @@ func TestCoreScheduler_PartitionEvalReap(t *testing.T) {
 	if len(third.Allocs) != 0 && len(third.Evals) != 2 {
 		t.Fatalf("Unexpected third request: %v", third)
 	}
+}
+
+func TestCoreScheduler_JobGCReapOptions(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
+
+	snap, err := s1.fsm.State().Snapshot()
+	must.NoError(t, err)
+	core := NewCoreScheduler(s1, snap, nil).(*CoreScheduler)
+
+	options := core.jobGCReapOptions()
+	must.Eq(t, DefaultJobGCEvalReapBatchSize, options.evalBatchSize)
+	must.Eq(t, DefaultJobGCJobReapBatchSize, options.jobBatchSize)
+	must.Nil(t, options.limiter)
+
+	s1.config.JobGCEvalReapBatchSize = 256
+	s1.config.JobGCJobReapBatchSize = 128
+	s1.config.JobGCReapRateLimit = 50
+	options = core.jobGCReapOptions()
+	must.Eq(t, 256, options.evalBatchSize)
+	must.Eq(t, 128, options.jobBatchSize)
+	must.NotNil(t, options.limiter)
+	must.Eq(t, float64(50), float64(options.limiter.Limit()))
+	must.Eq(t, 1, options.limiter.Burst())
+	must.True(t, options.limiter.Allow())
+	must.False(t, options.limiter.Allow())
+
+	// Configured batch sizes may make reaps smaller, but never larger than
+	// the existing safe write limits.
+	s1.config.JobGCEvalReapBatchSize = MaxJobGCEvalReapBatchSize + 1
+	s1.config.JobGCJobReapBatchSize = MaxJobGCJobReapBatchSize + 1
+	options = core.jobGCReapOptions()
+	must.Eq(t, MaxJobGCEvalReapBatchSize, options.evalBatchSize)
+	must.Eq(t, MaxJobGCJobReapBatchSize, options.jobBatchSize)
 }
 
 func TestCoreScheduler_PartitionDeploymentReap(t *testing.T) {

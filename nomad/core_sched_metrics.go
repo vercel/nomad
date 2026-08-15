@@ -28,8 +28,6 @@ var (
 )
 
 const (
-	jobGCReapBatchSize = 2048
-
 	jobGCPhaseScan     = "scan"
 	jobGCPhaseEvalReap = "eval_reap"
 	jobGCPhaseJobReap  = "job_reap"
