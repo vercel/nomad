@@ -10,7 +10,6 @@ import (
 	"time"
 
 	memdb "github.com/hashicorp/go-memdb"
-	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -33,6 +32,27 @@ func planWaitFuture(future raft.ApplyFuture) (uint64, error) {
 		return 0, err
 	}
 	return future.Index(), nil
+}
+
+type testApplyFuture struct {
+	err      error
+	response any
+	index    uint64
+}
+
+func (f *testApplyFuture) Error() error  { return f.err }
+func (f *testApplyFuture) Response() any { return f.response }
+func (f *testApplyFuture) Index() uint64 { return f.index }
+
+type gatedApplyFuture struct {
+	raft.ApplyFuture
+	release <-chan struct{}
+}
+
+func (f *gatedApplyFuture) Error() error {
+	err := f.ApplyFuture.Error()
+	<-f.release
+	return err
 }
 
 func testRegisterNode(t *testing.T, s *Server, n *structs.Node) {
@@ -251,6 +271,108 @@ func TestPlanApply_applyPlan_RequiresEmbeddedJob(t *testing.T) {
 
 	_, err = srv.applyPlan(plan, planRes, snap)
 	must.EqError(t, err, "plan missing embedded job")
+}
+
+func TestPlanApply_applyPlan_StaleSnapshotMissingEval(t *testing.T) {
+	ci.Parallel(t)
+
+	srv, cleanup := TestServer(t, nil)
+	defer cleanup()
+	testutil.WaitForKeyring(t, srv.RPC, srv.Region())
+
+	node := mock.Node()
+	testRegisterNode(t, srv, node)
+
+	alloc := mock.Alloc()
+	must.NoError(t, srv.State().UpsertJobSummary(1000, mock.JobSummary(alloc.JobID)))
+	must.NoError(t, srv.State().UpsertJob(structs.MsgTypeTestSetup, 1001, nil, alloc.Job))
+
+	// Take the optimistic snapshot before the eval is registered. This is the
+	// interleaving produced by the plan pipeline when it retains overlays from
+	// an older canonical snapshot while a new job/eval is committed.
+	snap, err := srv.State().Snapshot()
+	must.NoError(t, err)
+
+	eval := mock.Eval()
+	eval.JobID = alloc.JobID
+	eval.Namespace = alloc.Namespace
+	must.NoError(t, srv.State().UpsertEvals(structs.MsgTypeTestSetup, 1002, []*structs.Evaluation{eval}))
+
+	plan := &structs.Plan{
+		Job: alloc.Job,
+		JobInfo: &structs.PlanJobTuple{
+			Namespace: alloc.Namespace,
+			ID:        alloc.Job.ID,
+		},
+		EvalID: eval.ID,
+	}
+	result := &structs.PlanResult{
+		NodeAllocation: map[string][]*structs.Allocation{
+			node.ID: {alloc},
+		},
+	}
+
+	future, err := srv.applyPlan(plan, result, snap)
+	must.NoError(t, err)
+	index, err := planWaitFuture(future)
+	must.NoError(t, err)
+
+	// The optimistic view contains the allocation even though it intentionally
+	// did not attempt to update an eval absent from its canonical base.
+	optimisticAlloc, err := snap.AllocByID(nil, alloc.ID)
+	must.NoError(t, err)
+	must.NotNil(t, optimisticAlloc)
+
+	// The authoritative FSM request retains EvalID and updates both objects.
+	canonicalAlloc, err := srv.State().AllocByID(nil, alloc.ID)
+	must.NoError(t, err)
+	must.NotNil(t, canonicalAlloc)
+	canonicalEval, err := srv.State().EvalByID(nil, eval.ID)
+	must.NoError(t, err)
+	must.NotNil(t, canonicalEval)
+	must.Eq(t, index, canonicalEval.ModifyIndex)
+}
+
+func TestPlanApply_asyncPlanWait_FSMError(t *testing.T) {
+	ci.Parallel(t)
+
+	fsmErr := errors.New("fsm rejected plan")
+	p := &planner{srv: &Server{logger: testlog.HCLogger(t)}}
+	pending := &pendingPlan{errCh: make(chan error, 1)}
+	indexCh := make(chan uint64, 1)
+	future := &testApplyFuture{response: fsmErr, index: 42}
+
+	p.asyncPlanWait(indexCh, future, &structs.PlanResult{}, pending)
+
+	result, err := pending.Wait()
+	require.ErrorIs(t, err, fsmErr)
+	require.Nil(t, result)
+	require.Equal(t, uint64(0), <-indexCh)
+}
+
+func TestPlanApply_applyPlan_OptimisticFailureDoesNotDispatch(t *testing.T) {
+	ci.Parallel(t)
+
+	srv, cleanup := TestServer(t, nil)
+	defer cleanup()
+	testutil.WaitForKeyring(t, srv.RPC, srv.Region())
+
+	alloc := mock.Alloc()
+	missing := mock.Alloc()
+	snap, err := srv.State().Snapshot()
+	must.NoError(t, err)
+	plan := &structs.Plan{Job: alloc.Job}
+	result := &structs.PlanResult{
+		NodeUpdate: map[string][]*structs.Allocation{
+			missing.NodeID: {missing},
+		},
+	}
+	before := srv.raft.AppliedIndex()
+
+	future, err := srv.applyPlan(plan, result, snap)
+	require.Error(t, err)
+	require.Nil(t, future)
+	require.Equal(t, before, srv.raft.AppliedIndex())
 }
 
 // Verifies that applyPlan properly updates the constituent objects in MemDB,
@@ -1363,12 +1485,6 @@ func TestPlanApply_EvalNodePlan_Node_Disconnected(t *testing.T) {
 func TestPlanApply_PipelinedPlans(t *testing.T) {
 	ci.Parallel(t)
 
-	// Set up sink to capture batching metrics
-	sink := metrics.NewInmemSink(10*time.Second, time.Minute)
-	cfg := metrics.DefaultConfig("nomad")
-	cfg.EnableHostname = false
-	metrics.NewGlobal(cfg, sink)
-
 	// Configure Raft to increase batching window
 	srv, cleanup := TestServer(t, func(c *Config) {
 		c.PlanApplyPipeline = 16
@@ -1396,6 +1512,33 @@ func TestPlanApply_PipelinedPlans(t *testing.T) {
 	index++
 	must.NoError(t, store.UpsertEvals(structs.MsgTypeTestSetup, index, []*structs.Evaluation{eval}))
 
+	// Hold the first completed future open so the assertion does not depend on
+	// single-node Raft timing. Subsequent plans must still be dispatched while
+	// that future is awaiting release.
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	realApply := srv.planner.raftApplyEncoded
+	firstApply := true
+	pipelined := make(chan struct{}, 1)
+	srv.planner.raftApplyEncoded = func(buf []byte) raft.ApplyFuture {
+		future := realApply(buf)
+		if firstApply {
+			firstApply = false
+			return &gatedApplyFuture{ApplyFuture: future, release: release}
+		}
+		select {
+		case pipelined <- struct{}{}:
+		default:
+		}
+		return future
+	}
+
 	// Submit plans and wait for them to complete
 	numPlans := 20
 	futures := make([]PlanFuture, numPlans)
@@ -1419,6 +1562,12 @@ func TestPlanApply_PipelinedPlans(t *testing.T) {
 		must.NoError(t, err)
 		futures[i] = future
 	}
+	select {
+	case <-pipelined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a second plan to dispatch while the first was in-flight")
+	}
+	close(release)
 	for i, future := range futures {
 		result, err := future.Wait()
 		must.NoError(t, err)
@@ -1428,21 +1577,4 @@ func TestPlanApply_PipelinedPlans(t *testing.T) {
 	must.NoError(t, err)
 	must.Len(t, numPlans, allocs, must.Sprintf("expected %d allocations", numPlans))
 
-	// Verify that pipelining occurred by checking the batching metrics.
-	// Max > 0 means at least one plan observed another plan already in-flight,
-	// proving that pipelining occurred (multiple plans in the Raft pipeline
-	// simultaneously)
-
-	data := sink.Data()
-	must.NotEq(t, 0, len(data), must.Sprint("no metrics data collected"))
-
-	var maxInFlight float64
-	for _, interval := range data {
-		if sample, ok := interval.Samples["nomad.nomad.plan.outstanding_apply"]; ok {
-			if sample.Max > maxInFlight {
-				maxInFlight = sample.Max
-			}
-		}
-	}
-	must.Greater(t, 0.0, maxInFlight, must.Sprint("expected pipelined plans"))
 }

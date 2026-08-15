@@ -24,6 +24,10 @@ import (
 type planner struct {
 	srv *Server
 
+	// raftApplyEncoded submits a pre-encoded command. It is a field so tests
+	// can deterministically hold a future open while exercising the pipeline.
+	raftApplyEncoded func([]byte) raft.ApplyFuture
+
 	// planQueue is used to manage the submitted allocation
 	// plans that are waiting to be assessed by the leader
 	planQueue *PlanQueue
@@ -62,9 +66,10 @@ func newPlanner(s *Server) (*planner, error) {
 	}
 
 	return &planner{
-		srv:            s,
-		planQueue:      planQueue,
-		badNodeTracker: badNodeTracker,
+		srv:              s,
+		raftApplyEncoded: s.raftApplyEncoded,
+		planQueue:        planQueue,
+		badNodeTracker:   badNodeTracker,
 	}, nil
 }
 
@@ -117,6 +122,11 @@ func (p *planner) planApply(maxPipelineDepth int) {
 	// updates that would be lost on refresh.
 	var inFlightPlans int
 
+	// snapshotInvalid is set when an authoritative Raft apply fails. Any
+	// optimistic updates built on that failed command must be discarded before
+	// evaluating more plans.
+	var snapshotInvalid bool
+
 	// Setup a worker pool with half the cores, with at least 1
 	poolSize := runtime.NumCPU() / 2
 	if poolSize == 0 {
@@ -145,12 +155,30 @@ func (p *planner) planApply(maxPipelineDepth int) {
 			select {
 			case idx := <-planIndexCh:
 				inFlightPlans--
-				maxNewIndex = max(maxNewIndex, idx)
+				if idx == 0 {
+					snapshotInvalid = true
+				} else {
+					maxNewIndex = max(maxNewIndex, idx)
+				}
 			default:
 				goto DONE_DRAINING // no more ready
 			}
 		}
 	DONE_DRAINING:
+		if snapshotInvalid {
+			// Later plans may have been evaluated against the failed optimistic
+			// update. Let their authoritative applies settle, then rebuild from
+			// canonical state before evaluating the newly dequeued plan.
+			for inFlightPlans > 0 {
+				idx := <-planIndexCh
+				inFlightPlans--
+				if idx != 0 {
+					maxNewIndex = max(maxNewIndex, idx)
+				}
+			}
+			snap = nil
+			snapshotInvalid = false
+		}
 
 		inFlightPlans = max(inFlightPlans, 0)
 		metrics.AddSample(metricPlanOutstandingApply, float32(inFlightPlans))
@@ -222,9 +250,23 @@ func (p *planner) planApply(maxPipelineDepth int) {
 		for inFlightPlans >= maxPipelineDepth {
 			idx := <-planIndexCh
 			inFlightPlans--
-			prevPlanResultIndex = max(prevPlanResultIndex, idx)
+			if idx == 0 {
+				snapshotInvalid = true
+			} else {
+				prevPlanResultIndex = max(prevPlanResultIndex, idx)
+			}
 		}
 		metrics.MeasureSince([]string{"nomad", "plan", "wait_raft"}, waitRaftStart)
+		if snapshotInvalid {
+			// The current result was evaluated against an invalid optimistic
+			// chain. Returning an error is safe because this plan has not been
+			// dispatched; the scheduler will retry it against canonical state.
+			err := fmt.Errorf("discarding plan evaluated after a failed Raft apply")
+			p.srv.logger.Error("failed to submit plan", "error", err)
+			pending.respond(nil, err)
+			metrics.MeasureSince([]string{"nomad", "plan", "loop"}, loopStart)
+			continue
+		}
 
 		// Dispatch the Raft transaction for the plan without blocking. This
 		// enables pipelining: multiple plans can be in-flight in the Raft
@@ -310,7 +352,6 @@ func (p *planner) snapshotMinIndex(prevPlanResultIndex, planSnapshotIndex uint64
 }
 
 // applyPlan is used to apply the plan result and to return the alloc index.
-// Returns the raft future, the optimistic index (0 if not applied), and any error.
 func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap *state.StateSnapshot) (raft.ApplyFuture, error) {
 	now := time.Now().UTC()
 	unixNow := now.UnixNano()
@@ -392,22 +433,39 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 	}
 	req.PreemptionEvals = evals
 
-	// Dispatch the Raft transaction
-	metricNow := time.Now().UTC()
-	future, err := p.srv.raftApplyFuture(structs.ApplyPlanResultsRequestType, &req)
+	// Encode the authoritative request before optimistically applying it. The
+	// optimistic apply mutates request-owned objects while denormalizing them,
+	// so encoding first ensures those private mutations cannot change the Raft
+	// command.
+	buf, err := p.srv.encodeRaftApply(structs.ApplyPlanResultsRequestType, &req)
 	if err != nil {
 		return nil, err
 	}
-	metrics.MeasureSince(metricPlanBlockOnRaftDispatch, metricNow)
 
-	// Optimistically apply to our state view
+	// Apply to the optimistic state before dispatching the Raft transaction.
+	// StateStore transactions abort on error, so this preserves the invariant
+	// that applyPlan never returns an error after a command may already have
+	// committed.
 	if snap != nil {
 		defer metrics.MeasureSince(metricPlanOptimisiticApply, time.Now())
+		// The scheduler already owns the evaluation and the authoritative FSM
+		// must still advance its ModifyIndex. The private optimistic snapshot,
+		// however, may predate a newly registered evaluation while containing
+		// pipelined plan overlays. Updating that absent eval is bookkeeping only
+		// and previously caused a false Plan.Submit error and one-second Nack.
+		optimisticReq := req
+		optimisticReq.EvalID = ""
 		nextIdx := p.srv.raft.AppliedIndex() + 1
-		if err := snap.UpsertPlanResults(structs.ApplyPlanResultsRequestType, nextIdx, &req); err != nil {
-			return future, err
+		if err := snap.UpsertPlanResults(structs.ApplyPlanResultsRequestType, nextIdx, &optimisticReq); err != nil {
+			return nil, err
 		}
 	}
+
+	// Dispatch the already-encoded authoritative request only after the local
+	// optimistic update is known to be valid.
+	metricNow := time.Now().UTC()
+	future := p.raftApplyEncoded(buf)
+	metrics.MeasureSince(metricPlanBlockOnRaftDispatch, metricNow)
 	return future, nil
 }
 
@@ -482,6 +540,15 @@ func (p *planner) asyncPlanWait(indexCh chan<- uint64, future raft.ApplyFuture,
 		p.srv.logger.Error("failed to apply plan", "error", err)
 		pending.respond(nil, err)
 		// Send 0 to indicate failure
+		select {
+		case indexCh <- 0:
+		default:
+		}
+		return
+	}
+	if err, ok := future.Response().(error); ok && err != nil {
+		p.srv.logger.Error("failed to apply plan", "error", err)
+		pending.respond(nil, err)
 		select {
 		case indexCh <- 0:
 		default:

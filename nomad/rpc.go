@@ -785,8 +785,8 @@ func (r *rpcHandler) streamingRpcImpl(conn net.Conn, method string) (net.Conn, e
 	return conn, nil
 }
 
-// raftApplyFuture is used to encode a message, run it through raft, and return the Raft future.
-func (s *Server) raftApplyFuture(t structs.MessageType, msg any) (raft.ApplyFuture, error) {
+// encodeRaftApply is used to encode a message before it is submitted to Raft.
+func (s *Server) encodeRaftApply(t structs.MessageType, msg any) ([]byte, error) {
 	buf, err := structs.Encode(t, msg)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to encode request: %v", err)
@@ -796,9 +796,22 @@ func (s *Server) raftApplyFuture(t structs.MessageType, msg any) (raft.ApplyFutu
 	if n := len(buf); n > raftWarnSize {
 		s.logger.Warn("attempting to apply large raft entry", "raft_type", t, "bytes", n)
 	}
+	return buf, nil
+}
 
-	future := s.raft.Apply(buf, enqueueLimit)
-	return future, nil
+// raftApplyFuture is used to encode a message, run it through raft, and return the Raft future.
+func (s *Server) raftApplyFuture(t structs.MessageType, msg any) (raft.ApplyFuture, error) {
+	buf, err := s.encodeRaftApply(t, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.raftApplyEncoded(buf), nil
+}
+
+// raftApplyEncoded submits an already encoded message to Raft.
+func (s *Server) raftApplyEncoded(buf []byte) raft.ApplyFuture {
+	return s.raft.Apply(buf, enqueueLimit)
 }
 
 // raftApplyFn is the function signature for applying a msg to Raft
