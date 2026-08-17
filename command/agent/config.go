@@ -304,6 +304,9 @@ type ClientConfig struct {
 	// CpuCompute is used to override any detected or default total CPU compute.
 	CpuCompute int `hcl:"cpu_total_compute"`
 
+	// CpuCoreCompute overrides the compute charged for each core reserved by a task.
+	CpuCoreCompute int `hcl:"cpu_core_compute"`
+
 	// MemoryMB is used to override any detected or default total memory.
 	MemoryMB int `hcl:"memory_total_mb"`
 
@@ -2916,6 +2919,9 @@ func (c *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	}
 	if b.CpuCompute != 0 {
 		result.CpuCompute = b.CpuCompute
+	}
+	if b.CpuCoreCompute != 0 {
+		result.CpuCoreCompute = b.CpuCoreCompute
 	}
 	if b.MemoryMB != 0 {
 		result.MemoryMB = b.MemoryMB

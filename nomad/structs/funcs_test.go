@@ -250,6 +250,42 @@ func TestAllocsFit(t *testing.T) {
 	must.Eq(t, 1024, used.Flattened.Memory.MemoryMB)
 }
 
+func TestAllocsFit_CoreComputeOverride(t *testing.T) {
+	ci.Parallel(t)
+
+	n := node2k()
+	n.NodeResources.Processors.Topology.OverrideTotalCompute = 5000
+	n.NodeResources.Processors.Topology.OverrideCoreCompute = 2000
+	alloc := &Allocation{
+		AllocatedResources: &AllocatedResources{
+			Tasks: map[string]*AllocatedTaskResources{
+				"pinned": {
+					Cpu: AllocatedCpuResources{
+						CpuShares:     3000,
+						ReservedCores: []uint16{0},
+					},
+				},
+				"floating": {
+					Cpu: AllocatedCpuResources{CpuShares: 2000},
+				},
+			},
+		},
+	}
+
+	fit, dim, used, err := AllocsFit(n, []*Allocation{alloc}, nil, false)
+	must.NoError(t, err)
+	must.True(t, fit, must.Sprintf("failed for dimension %q", dim))
+	must.Eq(t, 4000, used.Flattened.Cpu.CpuShares)
+	must.Eq(t, 3000, alloc.AllocatedResources.Tasks["pinned"].Cpu.CpuShares)
+
+	n.NodeResources.Processors.Topology.OverrideCoreCompute = 0
+	fit, dim, used, err = AllocsFit(n, []*Allocation{alloc}, nil, false)
+	must.NoError(t, err)
+	must.False(t, fit)
+	must.Eq(t, "cpu", dim)
+	must.Eq(t, 5000, used.Flattened.Cpu.CpuShares)
+}
+
 func TestAllocsFit_Cores(t *testing.T) {
 	ci.Parallel(t)
 

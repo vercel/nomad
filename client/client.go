@@ -3451,6 +3451,7 @@ func (c *Client) getAllocatedResources(selfNode *structs.Node) *structs.Comparab
 	// Sum the allocated resources
 	var allocated structs.ComparableResources
 	allocatedDeviceMbits := make(map[string]int)
+	coreCompute := selfNode.NodeResources.CpuCoreCompute()
 	for _, ar := range c.getAllocRunners() {
 		alloc := ar.Alloc()
 		if alloc.ServerTerminalStatus() || ar.AllocState().ClientTerminalStatus() {
@@ -3458,7 +3459,7 @@ func (c *Client) getAllocatedResources(selfNode *structs.Node) *structs.Comparab
 		}
 
 		// Add the resources
-		allocated.Add(alloc.AllocatedResources.Comparable())
+		allocated.Add(alloc.AllocatedResources.ComparableWithCoreCompute(coreCompute))
 
 		// Add the used network
 		if alloc.AllocatedResources != nil {

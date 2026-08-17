@@ -146,6 +146,50 @@ func TestResourceDistance(t *testing.T) {
 
 }
 
+func TestPreemption_CoreComputeOverride(t *testing.T) {
+	ci.Parallel(t)
+
+	_, processors := tests.CpuResources(2500)
+	processors.Topology.OverrideTotalCompute = 2500
+	processors.Topology.OverrideCoreCompute = 2000
+	node := &structs.Node{
+		NodeResources:     &structs.NodeResources{Processors: processors},
+		ReservedResources: &structs.NodeReservedResources{},
+	}
+
+	lowPriorityJob := mock.Job()
+	lowPriorityJob.Priority = 30
+	candidate := tests.CreateAlloc("pinned", lowPriorityJob, &structs.Resources{CPU: 3000})
+	candidate.AllocatedResources.Tasks["web"].Cpu.ReservedCores = []uint16{0}
+
+	highPriorityJob := mock.Job()
+	highPriorityJob.Priority = 100
+	highPriorityJobID := structs.NewNamespacedID(highPriorityJob.ID, highPriorityJob.Namespace)
+	resourceAsk := &structs.AllocatedResources{
+		Tasks: map[string]*structs.AllocatedTaskResources{
+			"web": {
+				Cpu: structs.AllocatedCpuResources{
+					CpuShares:     3000,
+					ReservedCores: []uint16{0},
+				},
+			},
+		},
+	}
+
+	preemptor := NewPreemptor(100, nil, &highPriorityJobID)
+	preemptor.SetNode(node)
+	preemptor.SetCandidates([]*structs.Allocation{candidate})
+	preempted := preemptor.PreemptForTaskGroup(resourceAsk)
+	must.Len(t, 1, preempted)
+	must.Eq(t, candidate.ID, preempted[0].ID)
+
+	processors.Topology.OverrideCoreCompute = 0
+	preemptor = NewPreemptor(100, nil, &highPriorityJobID)
+	preemptor.SetNode(node)
+	preemptor.SetCandidates([]*structs.Allocation{candidate})
+	must.Len(t, 0, preemptor.PreemptForTaskGroup(resourceAsk))
+}
+
 func makeDeviceInstance(instanceID, busID string) *structs.NodeDevice {
 	return &structs.NodeDevice{
 		ID:      instanceID,

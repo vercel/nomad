@@ -129,6 +129,9 @@ type Preemptor struct {
 	// currentAllocs is the candidate set used to find preemptible allocations
 	currentAllocs []*structs.Allocation
 
+	// coreCompute is the scheduler charge for each reserved core on the node.
+	coreCompute int64
+
 	// ctx is the context from the scheduler stack
 	ctx Context
 }
@@ -156,6 +159,7 @@ func (p *Preemptor) Copy() *Preemptor {
 		jobID:                  p.jobID,
 		nodeRemainingResources: p.nodeRemainingResources.Copy(),
 		currentAllocs:          helper.CopySlice(p.currentAllocs),
+		coreCompute:            p.coreCompute,
 		ctx:                    p.ctx,
 	}
 }
@@ -163,6 +167,7 @@ func (p *Preemptor) Copy() *Preemptor {
 // SetNode sets the node
 func (p *Preemptor) SetNode(node *structs.Node) {
 	nodeRemainingResources := node.NodeResources.Comparable()
+	p.coreCompute = node.NodeResources.CpuCoreCompute()
 
 	// Subtract the reserved resources of the node
 	if c := node.ReservedResources.Comparable(); c != nil {
@@ -187,7 +192,10 @@ func (p *Preemptor) SetCandidates(allocs []*structs.Allocation) {
 		if tg != nil && tg.Migrate != nil {
 			maxParallel = tg.Migrate.MaxParallel
 		}
-		p.allocDetails[alloc.ID] = &allocInfo{maxParallel: maxParallel, resources: alloc.AllocatedResources.Comparable()}
+		p.allocDetails[alloc.ID] = &allocInfo{
+			maxParallel: maxParallel,
+			resources:   alloc.AllocatedResources.ComparableWithCoreCompute(p.coreCompute),
+		}
 		p.currentAllocs = append(p.currentAllocs, alloc)
 	}
 }
@@ -225,7 +233,7 @@ func (p *Preemptor) getNumPreemptions(alloc *structs.Allocation) int {
 // the resources asked for. Only allocs with a job priority < 10 of jobPriority are considered
 // This method is meant only for finding preemptible allocations based on CPU/Memory/Disk
 func (p *Preemptor) PreemptForTaskGroup(resourceAsk *structs.AllocatedResources) []*structs.Allocation {
-	resourcesNeeded := resourceAsk.Comparable()
+	resourcesNeeded := resourceAsk.ComparableWithCoreCompute(p.coreCompute)
 
 	// Subtract current allocations
 	for _, alloc := range p.currentAllocs {
@@ -242,7 +250,7 @@ func (p *Preemptor) PreemptForTaskGroup(resourceAsk *structs.AllocatedResources)
 	// Initialize variable to track resources as they become available from preemption
 	availableResources := p.nodeRemainingResources.Copy()
 
-	resourcesAsked := resourceAsk.Comparable()
+	resourcesAsked := resourceAsk.ComparableWithCoreCompute(p.coreCompute)
 	// Iterate over allocations grouped by priority to find preemptible allocations
 	for _, allocGrp := range allocsByPriority {
 		for len(allocGrp.allocs) > 0 && !allRequirementsMet {
@@ -287,7 +295,7 @@ func (p *Preemptor) PreemptForTaskGroup(resourceAsk *structs.AllocatedResources)
 	// We do another pass to eliminate unnecessary preemptions
 	// This filters out allocs whose resources are already covered by another alloc
 	basePreemptionResource := GetBasePreemptionResourceFactory()
-	resourcesNeeded = resourceAsk.Comparable()
+	resourcesNeeded = resourceAsk.ComparableWithCoreCompute(p.coreCompute)
 	filteredBestAllocs := p.filterSuperset(bestAllocs, p.nodeRemainingResources, resourcesNeeded, basePreemptionResource)
 	return filteredBestAllocs
 

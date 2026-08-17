@@ -997,6 +997,15 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if agentConfig.Client.CpuCompute != 0 {
 		conf.CpuCompute = agentConfig.Client.CpuCompute
 	}
+	if agentConfig.Client.CpuCoreCompute != 0 {
+		conf.CpuCoreCompute = agentConfig.Client.CpuCoreCompute
+	}
+	if conf.CpuCoreCompute < 0 {
+		return nil, fmt.Errorf("cpu_core_compute must not be negative")
+	}
+	if conf.CpuCoreCompute > 0 && conf.CpuCompute <= 0 {
+		return nil, fmt.Errorf("cpu_core_compute requires cpu_total_compute")
+	}
 	if agentConfig.Client.MemoryMB != 0 {
 		conf.MemoryMB = agentConfig.Client.MemoryMB
 	}

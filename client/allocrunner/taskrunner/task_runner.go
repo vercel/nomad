@@ -1601,7 +1601,8 @@ func (tr *TaskRunner) setGaugeForCPU(ru *cstructs.TaskResourceUsage) {
 	alloc := tr.Alloc()
 	var allocatedCPU float32
 	if taskRes := alloc.AllocatedResources.Tasks[tr.taskName]; taskRes != nil {
-		allocatedCPU = float32(taskRes.Cpu.CpuShares)
+		coreCompute := tr.clientConfig.Node.NodeResources.CpuCoreCompute()
+		allocatedCPU = float32(taskRes.Cpu.SchedulerCpuShares(coreCompute))
 	}
 
 	metrics.SetGaugeWithLabels([]string{"client", "allocs", "cpu", "total_percent"},

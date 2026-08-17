@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/lib/idset"
+	"github.com/hashicorp/nomad/client/lib/numalib"
 	"github.com/hashicorp/nomad/client/lib/numalib/hw"
 	"github.com/hashicorp/nomad/helper/uuid"
 	psstructs "github.com/hashicorp/nomad/plugins/shared/structs"
@@ -7266,6 +7267,45 @@ func TestAllocatedResources_Comparable_Flattened(t *testing.T) {
 	// The output of Flattened should return the resource required during the execution of the largest lifecycle
 	must.Eq(t, 9000, allocationResources.Comparable().Flattened.Cpu.CpuShares)
 	must.Len(t, 9, allocationResources.Comparable().Flattened.Cpu.ReservedCores)
+}
+
+func TestAllocatedResources_ComparableWithCoreCompute(t *testing.T) {
+	ci.Parallel(t)
+
+	resources := &AllocatedResources{
+		Tasks: map[string]*AllocatedTaskResources{
+			"pinned": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     3200,
+					ReservedCores: []uint16{1, 2},
+				},
+			},
+			"floating": {
+				Cpu: AllocatedCpuResources{CpuShares: 500},
+			},
+		},
+	}
+
+	must.Eq(t, 3700, resources.Comparable().Flattened.Cpu.CpuShares)
+	must.Eq(t, 2500, resources.ComparableWithCoreCompute(1000).Flattened.Cpu.CpuShares)
+	must.Eq(t, 3200, resources.Tasks["pinned"].Cpu.CpuShares)
+	must.Eq(t, 3200, resources.Tasks["pinned"].Cpu.SchedulerCpuShares(0))
+	must.Eq(t, 2000, resources.Tasks["pinned"].Cpu.SchedulerCpuShares(1000))
+	must.Eq(t, 500, resources.Tasks["floating"].Cpu.SchedulerCpuShares(1000))
+}
+
+func TestNodeResources_CpuCoreCompute(t *testing.T) {
+	ci.Parallel(t)
+
+	resources := &NodeResources{
+		Processors: NodeProcessorResources{
+			Topology: &numalib.Topology{OverrideCoreCompute: 1000},
+		},
+	}
+
+	must.Zero(t, resources.CpuCoreCompute())
+	resources.Processors.Topology.OverrideTotalCompute = 4000
+	must.Eq(t, 1000, resources.CpuCoreCompute())
 }
 
 func requireErrors(t *testing.T, err error, expected ...string) {

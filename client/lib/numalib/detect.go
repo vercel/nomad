@@ -57,6 +57,12 @@ type ConfigScanner struct {
 	// Used to withhold an amount of MHz of CPU bandwidth from being used by
 	// Nomad for scheduling.
 	ReservedCompute hw.MHz
+
+	// CoreCompute comes from client.cpu_core_compute.
+	//
+	// Used to override the compute charged by the scheduler for each core
+	// reserved by a task. This value must use the same unit as TotalCompute.
+	CoreCompute hw.MHz
 }
 
 func (cs *ConfigScanner) ScanSystem(top *Topology) {
@@ -81,4 +87,7 @@ func (cs *ConfigScanner) ScanSystem(top *Topology) {
 
 	// set the reserved compute from client configuration
 	top.OverrideWitholdCompute = cs.ReservedCompute
+
+	// set the compute charged for each reserved core
+	top.OverrideCoreCompute = cs.CoreCompute
 }

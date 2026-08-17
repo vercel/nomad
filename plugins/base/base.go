@@ -123,6 +123,7 @@ func nomadTopologyFromProto(pb *proto.ClientTopology) *numalib.Topology {
 		Cores:                  nomadTopologyCoresFromProto(pb.Cores),
 		OverrideTotalCompute:   hw.MHz(pb.OverrideTotalCompute),
 		OverrideWitholdCompute: hw.MHz(pb.OverrideWitholdCompute),
+		OverrideCoreCompute:    hw.MHz(pb.OverrideCoreCompute),
 	}
 	t.SetNodes(idset.FromFunc(pb.NodeIds, func(i uint32) hw.NodeID { return hw.NodeID(i) }))
 
@@ -173,6 +174,7 @@ func nomadTopologyToProto(top *numalib.Topology) *proto.ClientTopology {
 		Cores:                  nomadTopologyCoresToProto(top.Cores),
 		OverrideTotalCompute:   uint64(top.OverrideTotalCompute),
 		OverrideWitholdCompute: uint64(top.OverrideWitholdCompute),
+		OverrideCoreCompute:    uint64(top.OverrideCoreCompute),
 	}
 }
 

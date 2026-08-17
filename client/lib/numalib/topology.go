@@ -85,6 +85,7 @@ type Topology struct {
 	// explicit overrides from client configuration
 	OverrideTotalCompute   hw.MHz
 	OverrideWitholdCompute hw.MHz
+	OverrideCoreCompute    hw.MHz
 }
 
 func (st *Topology) SetNodes(nodes *idset.Set[hw.NodeID]) {
@@ -323,5 +324,6 @@ func (st *Topology) Equal(o *Topology) bool {
 	}
 	// simply iterates each core; the topology never changes for a node once
 	// it has been created at agent startup
-	return st.TotalCompute() == o.TotalCompute()
+	return st.TotalCompute() == o.TotalCompute() &&
+		st.OverrideCoreCompute == o.OverrideCoreCompute
 }
