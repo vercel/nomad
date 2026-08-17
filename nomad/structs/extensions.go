@@ -42,12 +42,14 @@ func numaTopoExt(v interface{}) interface{} {
 		Cores                  []numalib.Core
 		OverrideTotalCompute   hw.MHz
 		OverrideWitholdCompute hw.MHz
+		OverrideCoreCompute    hw.MHz
 	}{
 		Nodes:                  nodes,
 		Distances:              topo.Distances,
 		Cores:                  topo.Cores,
 		OverrideTotalCompute:   topo.OverrideTotalCompute,
 		OverrideWitholdCompute: topo.OverrideWitholdCompute,
+		OverrideCoreCompute:    topo.OverrideCoreCompute,
 	}
 }
 

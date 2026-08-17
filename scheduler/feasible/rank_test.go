@@ -1389,6 +1389,68 @@ func TestBinPackIterator_ReservedCores(t *testing.T) {
 	must.Eq(t, []uint16{1}, out[0].TaskResources["web"].Cpu.ReservedCores)
 }
 
+func TestBinPackIterator_CoreComputeOverride(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		coreCompute hw.MHz
+		expectFit   bool
+	}{
+		{name: "enabled", coreCompute: 2000, expectFit: true},
+		{name: "disabled", expectFit: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, ctx := MockContext(t)
+			topology := &numalib.Topology{
+				Distances:            numalib.SLIT{[]numalib.Cost{10}},
+				OverrideTotalCompute: 2000,
+				OverrideCoreCompute:  testCase.coreCompute,
+				Cores: []numalib.Core{{
+					ID:        0,
+					Grade:     numalib.Performance,
+					BaseSpeed: 3000,
+				}},
+			}
+			topology.SetNodes(idset.From[hw.NodeID]([]hw.NodeID{0}))
+			legacyCPU, processors := tests.CpuResourcesFrom(topology)
+			node := &RankedNode{
+				Node: &structs.Node{
+					ID: uuid.Generate(),
+					NodeResources: &structs.NodeResources{
+						Processors: processors,
+						Cpu:        legacyCPU,
+						Memory:     structs.NodeMemoryResources{MemoryMB: 1024},
+					},
+				},
+			}
+
+			static := NewStaticRankIterator(ctx, []*RankedNode{node})
+			binpack := NewBinPackIterator(ctx, static, false, 0)
+			binpack.SetTaskGroup(&structs.TaskGroup{
+				EphemeralDisk: &structs.EphemeralDisk{},
+				Tasks: []*structs.Task{{
+					Name: "web",
+					Resources: &structs.Resources{
+						Cores:    1,
+						MemoryMB: 1,
+						NUMA:     &structs.NUMA{Affinity: "none"},
+					},
+				}},
+			})
+			binpack.SetSchedulerConfiguration(testSchedulerConfig)
+
+			out := collectRanked(binpack)
+			if !testCase.expectFit {
+				must.Len(t, 0, out)
+				return
+			}
+
+			must.Len(t, 1, out)
+			must.Eq(t, 3000, out[0].TaskResources["web"].Cpu.CpuShares)
+			must.Eq(t, []uint16{0}, out[0].TaskResources["web"].Cpu.ReservedCores)
+		})
+	}
+}
+
 func TestBinPackIterator_ExistingAlloc(t *testing.T) {
 	state, ctx := MockContext(t)
 	nodes := []*RankedNode{

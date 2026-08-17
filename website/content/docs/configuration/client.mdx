@@ -87,6 +87,11 @@ client {
   clients can determine their total CPU compute automatically, and thus in most
   cases this should be left unset.
 
+- `cpu_core_compute` `(int: 0)` - Specifies the CPU compute that the scheduler
+  charges for each core that a task reserves with `cores`. This value must use
+  the same unit as `cpu_total_compute`, which must also be set. If this value is
+  zero, Nomad charges the detected MHz of each selected core.
+
 - `memory_total_mb` `(int:0)` - Specifies an override for the total memory. If set,
   this value overrides any detected memory.
 

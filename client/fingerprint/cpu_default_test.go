@@ -87,6 +87,7 @@ func TestCPUFingerprint_OverrideCompute(t *testing.T) {
 	{
 		// Override it with a setting
 		cfg.CpuCompute = originalCompute + 123
+		cfg.CpuCoreCompute = 2000
 
 		// Make sure the Fingerprinter applies the override to the node resources
 		request := &FingerprintRequest{Config: cfg, Node: node}
@@ -96,6 +97,7 @@ func TestCPUFingerprint_OverrideCompute(t *testing.T) {
 
 		// topology struct
 		must.Eq(t, hw.MHz(cfg.CpuCompute), response.NodeResources.Processors.Topology.UsableCompute(), must.Sprint("cpu override did not take affect"))
+		must.Eq(t, hw.MHz(cfg.CpuCoreCompute), response.NodeResources.Processors.Topology.OverrideCoreCompute)
 
 		// legacy struct
 		must.Eq(t, int64(cfg.CpuCompute), response.NodeResources.Cpu.CpuShares, must.Sprint("cpu override did not take affect"))

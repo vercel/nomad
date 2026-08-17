@@ -100,6 +100,7 @@ message ClientTopology {
     repeated ClientTopologyCore cores = 3;
     uint64 override_total_compute = 4;
     uint64 override_withold_compute = 5;
+    uint64 override_core_compute = 6;
 }
 
 // numalib/SLIT

@@ -3241,6 +3241,15 @@ func (n *NodeResources) Comparable() *ComparableResources {
 	return c
 }
 
+// CpuCoreCompute returns the configured scheduler charge for each core that a
+// task reserves. Zero keeps the compute value stored in the allocation.
+func (n *NodeResources) CpuCoreCompute() int64 {
+	if n == nil || n.Processors.Topology == nil || n.Processors.Topology.OverrideTotalCompute == 0 {
+		return 0
+	}
+	return int64(n.Processors.Topology.OverrideCoreCompute)
+}
+
 func (n *NodeResources) Merge(o *NodeResources) {
 	if o == nil {
 		return
@@ -3778,6 +3787,17 @@ func (a *AllocatedResources) Copy() *AllocatedResources {
 // Comparable returns a comparable version of the allocations allocated
 // resources. This conversion can be lossy so care must be taken when using it.
 func (a *AllocatedResources) Comparable() *ComparableResources {
+	return a.comparable(0)
+}
+
+// ComparableWithCoreCompute returns comparable resources and charges each
+// reserved core with coreCompute. A non-positive value keeps the compute value
+// stored in the allocation.
+func (a *AllocatedResources) ComparableWithCoreCompute(coreCompute int64) *ComparableResources {
+	return a.comparable(coreCompute)
+}
+
+func (a *AllocatedResources) comparable(coreCompute int64) *ComparableResources {
 	if a == nil {
 		return nil
 	}
@@ -3794,6 +3814,7 @@ func (a *AllocatedResources) Comparable() *ComparableResources {
 	for taskName, taskResources := range a.Tasks {
 		taskLifecycle := a.TaskLifecycles[taskName]
 		fungibleTaskResources := taskResources.Copy()
+		fungibleTaskResources.Cpu.CpuShares = fungibleTaskResources.Cpu.SchedulerCpuShares(coreCompute)
 
 		// Reserved cores (and their respective bandwidth) are not fungible,
 		// hence we should always include it as part of the Flattened resources.
@@ -4057,6 +4078,15 @@ func (a *AllocatedSharedResources) Canonicalize() {
 type AllocatedCpuResources struct {
 	CpuShares     int64
 	ReservedCores []uint16
+}
+
+// SchedulerCpuShares returns the compute that the scheduler charges for this
+// resource. A non-positive coreCompute value keeps the stored compute value.
+func (a AllocatedCpuResources) SchedulerCpuShares(coreCompute int64) int64 {
+	if coreCount := len(a.ReservedCores); coreCount > 0 && coreCompute > 0 {
+		return int64(coreCount) * coreCompute
+	}
+	return a.CpuShares
 }
 
 func (a *AllocatedCpuResources) Add(delta *AllocatedCpuResources) {

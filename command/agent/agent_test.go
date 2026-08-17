@@ -751,6 +751,30 @@ func TestConvertClientConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "core compute override",
+			modConfig: func(c *Config) {
+				c.Client.CpuCompute = 8000
+				c.Client.CpuCoreCompute = 2000
+			},
+			assert: func(t *testing.T, cc *clientconfig.Config) {
+				must.Eq(t, 2000, cc.CpuCoreCompute)
+			},
+		},
+		{
+			name: "core compute override requires total compute",
+			modConfig: func(c *Config) {
+				c.Client.CpuCoreCompute = 2000
+			},
+			expectErr: "cpu_core_compute requires cpu_total_compute",
+		},
+		{
+			name: "core compute override must not be negative",
+			modConfig: func(c *Config) {
+				c.Client.CpuCoreCompute = -1
+			},
+			expectErr: "cpu_core_compute must not be negative",
+		},
+		{
 			name: "ipv4 bridge subnet",
 			modConfig: func(c *Config) {
 				c.Client.BridgeNetworkSubnet = "10.0.0.0/24"

@@ -30,6 +30,7 @@ func Test_nomadTopologyToProto(t *testing.T) {
 		},
 		OverrideTotalCompute:   90_000,
 		OverrideWitholdCompute: 2000,
+		OverrideCoreCompute:    1000,
 	}
 	top.SetNodes(idset.From[hw.NodeID]([]hw.NodeID{0, 1}))
 
@@ -54,6 +55,7 @@ func Test_nomadTopologyToProto(t *testing.T) {
 		},
 		OverrideTotalCompute:   90_000,
 		OverrideWitholdCompute: 2000,
+		OverrideCoreCompute:    1000,
 	}, pb)
 
 	// make sure we don't panic in case of empty nodes, vide
@@ -67,6 +69,7 @@ func Test_nomadTopologyToProto(t *testing.T) {
 		Cores:                  nil,
 		OverrideTotalCompute:   0,
 		OverrideWitholdCompute: 0,
+		OverrideCoreCompute:    0,
 	}, pb2)
 }
 
@@ -91,6 +94,7 @@ func Test_nomadTopologyFromProto(t *testing.T) {
 		},
 		OverrideTotalCompute:   90_000,
 		OverrideWitholdCompute: 2000,
+		OverrideCoreCompute:    1000,
 	}
 	top := nomadTopologyFromProto(pb)
 	expect := &numalib.Topology{
@@ -109,6 +113,7 @@ func Test_nomadTopologyFromProto(t *testing.T) {
 		},
 		OverrideTotalCompute:   90_000,
 		OverrideWitholdCompute: 2000,
+		OverrideCoreCompute:    1000,
 	}
 	expect.SetNodes(idset.From[hw.NodeID]([]hw.NodeID{0, 1}))
 	must.Eq(t, expect, top)

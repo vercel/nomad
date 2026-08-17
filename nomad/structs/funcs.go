@@ -152,6 +152,7 @@ func AllocsFit(node *Node, allocs []*Allocation, netIdx *NetworkIndex, checkDevi
 
 	hostVolumeClaims := map[string]int{}
 	exclusiveHostVolumeClaims := []string{}
+	coreCompute := node.NodeResources.CpuCoreCompute()
 
 	// For each alloc, add the resources
 	for _, alloc := range allocs {
@@ -160,7 +161,7 @@ func AllocsFit(node *Node, allocs []*Allocation, netIdx *NetworkIndex, checkDevi
 			continue
 		}
 
-		cr := alloc.AllocatedResources.Comparable()
+		cr := alloc.AllocatedResources.ComparableWithCoreCompute(coreCompute)
 		used.Add(cr)
 
 		// Adding the comparable resource unions reserved core sets, need to check if reserved cores overlap

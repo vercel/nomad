@@ -73,6 +73,7 @@ var basicConfig = &Config{
 		NetworkInterface: "eth0",
 		NetworkSpeed:     100,
 		CpuCompute:       4444,
+		CpuCoreCompute:   1000,
 		MemoryMB:         0,
 		MaxKillTimeout:   "10s",
 		ClientMinPort:    1000,

@@ -135,6 +135,10 @@ type Config struct {
 	// dynamically. It should be given as Cores * MHz (2 Cores * 2 Ghz = 4000)
 	CpuCompute int
 
+	// CpuCoreCompute overrides the compute charged by the scheduler for each
+	// core reserved by a task. It requires CpuCompute to use the same unit.
+	CpuCoreCompute int
+
 	// MemoryMB is the default node total memory in megabytes if it cannot be
 	// determined dynamically.
 	MemoryMB int

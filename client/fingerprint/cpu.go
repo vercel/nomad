@@ -76,6 +76,7 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 	var (
 		reservableCores *idset.Set[hw.CoreID]
 		totalCompute    = request.Config.CpuCompute
+		coreCompute     = request.Config.CpuCoreCompute
 		reservedCompute = f.reservedCompute(request)
 		reservedCores   = idset.From[hw.CoreID](reservedCompute.ReservedCpuCores)
 	)
@@ -91,6 +92,7 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 			ReservedCores:   reservedCores,
 			TotalCompute:    hw.MHz(totalCompute),
 			ReservedCompute: hw.MHz(reservedCompute.CpuShares),
+			CoreCompute:     hw.MHz(coreCompute),
 		},
 	))
 }
