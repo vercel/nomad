@@ -28,19 +28,6 @@ updates:
         patterns:
           - "*"
 
-  - package-ecosystem: gomod
-    directory: "/jobspec2"
-    labels:
-      - "theme/dependencies"
-      - "theme/jobspec"
-    schedule:
-      interval: "cron"
-      cronjob: "0 9 15 * *" # once a month, mid-month
-    groups:
-      go-jobspec:
-        patterns:
-          - "*"
-
   - package-ecosystem: npm
     directory: "/ui"
     labels:
@@ -49,14 +36,6 @@ updates:
     schedule:
       interval: "cron"
       cronjob: "0 9 15 * *" # once a month, mid-month
-    allow:
-      - dependency-type: "production"
-        update-types:
-          - "version-update:semver-patch"
-      - dependency-type: "development"
-        update-types:
-          - "version-update:semver-patch"
-    versioning-strategy: "increase"
     groups:
       ui-dev:
          patterns:

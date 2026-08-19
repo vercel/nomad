@@ -6,6 +6,7 @@ package taskrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,7 +25,6 @@ import (
 	nmock "github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	sconfig "github.com/hashicorp/nomad/nomad/structs/config"
-	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 	"github.com/shoenig/test/wait"
 	"github.com/stretchr/testify/mock"
@@ -373,32 +373,13 @@ func TestVaultHook_Prestart(t *testing.T) {
 	})
 }
 
-func TestVaultHook_handleRenewalFailure(t *testing.T) {
+func TestVaultHook_handleRenewal(t *testing.T) {
 	ci.Parallel(t)
 
-	widMgr := widmgr.NewMockIdentityManager()
-	widMgr.SetIdentity(
-		structs.WIHandle{IdentityName: "vault_default",
-			WorkloadType: 0, WorkloadIdentifier: "t"},
-		&structs.SignedWorkloadIdentity{},
-	)
-	updater := &vaultTokenUpdaterMock{}
-
-	clientOk := vaultclient.NewMockVaultClient()
-	clientOk.On("DeriveTokenWithJWT", t.Context(), vaultclient.JWTLoginRequest{}).
-		Return("testToken", true, 5, nil)
-
-	clientErr := vaultclient.NewMockVaultClient()
-	clientErr.On("DeriveTokenWithJWT", t.Context(), vaultclient.JWTLoginRequest{}).
-		Return("", false, 0, errors.New("oops"))
-
 	testCases := []struct {
-		name        string
-		vaultBlock  *structs.Vault
-		vaultClient *vaultclient.MockVaultClient
-
-		expectErrMsg        string
-		verifyTaskLifecycle func(*testing.T, *trtesting.MockTaskHooks)
+		name                string
+		vaultBlock          *structs.Vault
+		verifyTaskLifecycle func(*trtesting.MockTaskHooks) error
 	}{
 		{
 			name: "change mode signal",
@@ -407,31 +388,15 @@ func TestVaultHook_handleRenewalFailure(t *testing.T) {
 				ChangeMode:   structs.VaultChangeModeSignal,
 				ChangeSignal: "SIGTERM",
 			},
-			vaultClient: clientOk,
-			verifyTaskLifecycle: func(t *testing.T, h *trtesting.MockTaskHooks) {
+			verifyTaskLifecycle: func(h *trtesting.MockTaskHooks) error {
 				signals := h.Signals()
-				must.Len(t, 1, signals, must.Sprint("expected 1 signal"))
-				test.Eq(t, "SIGTERM", signals[0])
-				restarts := h.Restarts()
-				test.Eq(t, 0, restarts, test.Sprint("expected no restart"))
-				test.Nil(t, h.KillEvent(), test.Sprint("expected no kill"))
-			},
-		},
-		{
-			name: "change mode signal refresh error",
-			vaultBlock: &structs.Vault{
-				Cluster:      structs.VaultDefaultCluster,
-				ChangeMode:   structs.VaultChangeModeSignal,
-				ChangeSignal: "SIGTERM",
-			},
-			vaultClient:  clientErr,
-			expectErrMsg: "failed to derive Vault token for identity vault_default: oops",
-			verifyTaskLifecycle: func(t *testing.T, h *trtesting.MockTaskHooks) {
-				signals := h.Signals()
-				test.Len(t, 0, signals, test.Sprint("expected no signal"))
-				restarts := h.Restarts()
-				test.Eq(t, 0, restarts, test.Sprint("expected no restart"))
-				test.NotNil(t, h.KillEvent(), test.Sprint("expected kill"))
+				if len(signals) != 1 {
+					return fmt.Errorf("expected 1 signal, got %d", len(signals))
+				}
+				if signals[0] != "SIGTERM" {
+					return fmt.Errorf("expected signal to be SIGTERM, got %s", signals[0])
+				}
+				return nil
 			},
 		},
 		{
@@ -440,13 +405,12 @@ func TestVaultHook_handleRenewalFailure(t *testing.T) {
 				Cluster:    structs.VaultDefaultCluster,
 				ChangeMode: structs.VaultChangeModeRestart,
 			},
-			vaultClient: clientOk,
-			verifyTaskLifecycle: func(t *testing.T, h *trtesting.MockTaskHooks) {
-				signals := h.Signals()
-				test.Len(t, 0, signals, test.Sprint("expected no signal"))
+			verifyTaskLifecycle: func(h *trtesting.MockTaskHooks) error {
 				restarts := h.Restarts()
-				test.Eq(t, 1, restarts, test.Sprint("expected 1 restart"))
-				test.Nil(t, h.KillEvent(), test.Sprint("expected no kill"))
+				if restarts != 1 {
+					return fmt.Errorf("expected 1 restart, got %d", restarts)
+				}
+				return nil
 			},
 		},
 		{
@@ -455,66 +419,40 @@ func TestVaultHook_handleRenewalFailure(t *testing.T) {
 				Cluster:    structs.VaultDefaultCluster,
 				ChangeMode: structs.VaultChangeModeNoop,
 			},
-			vaultClient: clientOk,
-			verifyTaskLifecycle: func(t *testing.T, h *trtesting.MockTaskHooks) {
-				signals := h.Signals()
-				test.Len(t, 0, signals, test.Sprint("expected no signal"))
+			verifyTaskLifecycle: func(h *trtesting.MockTaskHooks) error {
 				restarts := h.Restarts()
-				test.Eq(t, 0, restarts, test.Sprint("expected no restart"))
-				test.Nil(t, h.KillEvent(), test.Sprint("expected no kill"))
-			},
-		},
-		{
-			name: "change mode noop refresh error",
-			vaultBlock: &structs.Vault{
-				Cluster:    structs.VaultDefaultCluster,
-				ChangeMode: structs.VaultChangeModeNoop,
-			},
-			vaultClient:  clientErr,
-			expectErrMsg: "failed to derive Vault token for identity vault_default: oops",
-			verifyTaskLifecycle: func(t *testing.T, h *trtesting.MockTaskHooks) {
+				if restarts != 0 {
+					return fmt.Errorf("expected 0 restarts, got %d", restarts)
+				}
+
 				signals := h.Signals()
-				test.Len(t, 0, signals, test.Sprint("expected no signal"))
-				restarts := h.Restarts()
-				test.Eq(t, 0, restarts, test.Sprint("expected no restart"))
-				test.NotNil(t, h.KillEvent(), test.Sprint("expected kill"))
+				if len(signals) != 0 {
+					return fmt.Errorf("expected 0 signals, got %d", len(signals))
+				}
+
+				return nil
 			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			vaultClient := vaultclient.NewMockVaultClient()
+
+			hook := setupTestVaultHook(t, &vaultHookConfig{vaultBlock: tc.vaultBlock}, vaultClient)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			t.Cleanup(cancel)
 
-			hook := setupTestVaultHook(t, &vaultHookConfig{
-				vaultBlock: tc.vaultBlock,
-				widmgr:     widMgr,
-				updater:    updater},
-				tc.vaultClient)
+			hook.handleRenewal(ctx, "secret")
 
-			// required to simulate a previous PreStart running
-			hook.client, _ = hook.clientFunc("default")
-			hook.vaultConfig = hook.vaultConfigsFunc(hook.logger)["default"]
-			hook.secretsDirTokenPath = filepath.Join(t.TempDir(), vaultTokenFile)
-			hook.privateDirTokenPath = filepath.Join(t.TempDir(), vaultTokenFile)
+			// Fetch derived token.
+			updater := (hook.updater).(*vaultTokenUpdaterMock)
+			token := updater.currentToken
+			must.NotEq(t, "", token)
 
-			tok, lease, err := hook.handleRenewalFailure(ctx)
-
-			if tc.expectErrMsg == "" {
-				must.NoError(t, err)
-				must.Eq(t, "testToken", tok)
-				must.Eq(t, time.Duration(time.Second*5), lease)
-				updater = (hook.updater).(*vaultTokenUpdaterMock)
-				token := updater.currentToken
-				must.Eq(t, "testToken", token)
-			} else {
-				must.EqError(t, err, tc.expectErrMsg)
-				must.Eq(t, "", tok)
-				must.Eq(t, 0, lease)
-			}
-
-			tc.verifyTaskLifecycle(t, (hook.lifecycle).(*trtesting.MockTaskHooks))
+			err := tc.verifyTaskLifecycle((hook.lifecycle).(*trtesting.MockTaskHooks))
+			must.NoError(t, err)
 		})
 	}
 }

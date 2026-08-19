@@ -1,3 +1,0 @@
-```release-note:bug
-client: fix a bug where we could accidentally overwrite task states
-```

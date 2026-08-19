@@ -86,13 +86,13 @@ func normalizeVault(v *api.Vault) {
 	}
 
 	if v.Env == nil {
-		v.Env = new(true)
+		v.Env = pointerOf(true)
 	}
 	if v.DisableFile == nil {
-		v.DisableFile = new(false)
+		v.DisableFile = pointerOf(false)
 	}
 	if v.ChangeMode == nil {
-		v.ChangeMode = new("restart")
+		v.ChangeMode = pointerOf("restart")
 	}
 }
 
@@ -132,16 +132,16 @@ func normalizeTemplates(templates []*api.Template) {
 
 	for _, t := range templates {
 		if t.ChangeMode == nil {
-			t.ChangeMode = new("restart")
+			t.ChangeMode = pointerOf("restart")
 		}
 		if t.Perms == nil {
-			t.Perms = new("0644")
+			t.Perms = pointerOf("0644")
 		}
 		if t.Splay == nil {
-			t.Splay = new(5 * time.Second)
+			t.Splay = pointerOf(5 * time.Second)
 		}
 		if t.ErrMissingKey == nil {
-			t.ErrMissingKey = new(false)
+			t.ErrMissingKey = pointerOf(false)
 		}
 		normalizeChangeScript(t.ChangeScript)
 	}
@@ -157,13 +157,13 @@ func normalizeChangeScript(ch *api.ChangeScript) {
 	}
 
 	if ch.Timeout == nil {
-		ch.Timeout = new(5 * time.Second)
+		ch.Timeout = pointerOf(5 * time.Second)
 	}
 
 	if ch.FailOnError == nil {
-		ch.FailOnError = new(false)
+		ch.FailOnError = pointerOf(false)
 	}
 	if ch.RunOnFirstRender == nil {
-		ch.RunOnFirstRender = new(false)
+		ch.RunOnFirstRender = pointerOf(false)
 	}
 }

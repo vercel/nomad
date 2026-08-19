@@ -31,6 +31,7 @@
     "command/ui/...",
     "helper/...",
     "internal/...",
+    "jobspec2/...",
     "lib/...",
     "nomad/auth/...",
     "nomad/deploymentwatcher/...",

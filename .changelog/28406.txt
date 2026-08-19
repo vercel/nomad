@@ -1,3 +1,0 @@
-```release-note:improvement
-client: Added the `unique.host_id` node attribute to the host fingerprint, when available
-```

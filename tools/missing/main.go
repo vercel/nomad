@@ -147,7 +147,6 @@ func getManifest(r io.Reader) (Manifest, error) {
 var uninteresting = []string{
 	// module
 	"api",
-	"jobspec2",
 
 	// main
 	".",

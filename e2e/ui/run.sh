@@ -39,12 +39,12 @@ IMAGE="mcr.microsoft.com/playwright"
 # since playwright looks for latest browser(s),
 # it will throw an error in non-latest containers.
 # so, instead of constantly changing the image
-# tag manually, pull the latest stable tag from the registry API.
+# tag manually, pull it from the registry API.
 get_image_tag() {
   1>&2 echo 'detecting playwright image tag'
-  local os='jammy'
+  local os='noble'
   curl -sS 'https://mcr.microsoft.com/api/v1/catalog/playwright/tags?reg=mar' \
-  | jq -r --arg os "$os" '[ .[].name | select(match("^v[0-9]+\\.[0-9]+\\.[0-9]+-" + $os + "$")) ] | last '
+  | jq -r '[ .[].name | select(match("^v.*-jammy$")) ] | last '
   # '[ ..query.. ] | last' gets the bottom one in the api response
   # that matches the regex. the api returns them sorted oldest to newest.
 }

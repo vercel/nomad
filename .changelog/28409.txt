@@ -1,3 +1,0 @@
-```release-note:bug
-vault: Fixed a bug where a task's change_mode was triggered on each Vault token renewal
-```
