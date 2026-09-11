@@ -169,6 +169,9 @@ func (f *CPUFingerprint) setTotalCompute(response *FingerprintResponse, top *num
 
 	response.AddAttribute("cpu.totalcompute", f.frequency(totalCompute))
 	response.AddAttribute("cpu.usablecompute", f.frequency(usableCompute))
+	if top.OverrideTotalCompute > 0 && top.OverrideCoreCompute > 0 {
+		response.AddAttribute("cpu.corecompute", f.frequency(top.OverrideCoreCompute))
+	}
 }
 
 func (f *CPUFingerprint) setNUMA(response *FingerprintResponse, top *numalib.Topology) {

@@ -7308,6 +7308,23 @@ func TestNodeResources_CpuCoreCompute(t *testing.T) {
 	must.Eq(t, 1000, resources.CpuCoreCompute())
 }
 
+func TestAllocatedResources_CoreComputePoststop(t *testing.T) {
+	resources := &AllocatedResources{
+		Tasks: map[string]*AllocatedTaskResources{
+			"main":    {Cpu: AllocatedCpuResources{CpuShares: 3100, ReservedCores: []uint16{1}}},
+			"cleanup": {Cpu: AllocatedCpuResources{CpuShares: 100}},
+		},
+		TaskLifecycles: map[string]*TaskLifecycleConfig{
+			"cleanup": {Hook: TaskLifecycleHookPoststop},
+		},
+	}
+	// Reserved cores remain allocated throughout the task-group lifecycle.
+	// The poststop CPU demand is additional, not a replacement for them.
+	must.Eq(t, 3200, resources.Comparable().Flattened.Cpu.CpuShares)
+	must.Eq(t, 2100, resources.ComparableWithCoreCompute(2000).Flattened.Cpu.CpuShares)
+	must.Eq(t, 3100, resources.Tasks["main"].Cpu.CpuShares)
+}
+
 func requireErrors(t *testing.T, err error, expected ...string) {
 	t.Helper()
 	require.Error(t, err)

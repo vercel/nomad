@@ -22,8 +22,12 @@ the CPU set passed to its task driver.
 
 Choose the per-core value for the capacity model in use. It is not a detected
 CPU frequency, and it is not automatically multiplied by an SMT factor.
+The `cpu.corecompute` node attribute exposes the configured scheduler charge
+to API consumers. It is absent when the override is inactive.
 
 Update servers before clients. Old servers do not apply the new charge.
+Pause new placement and let in-flight plans settle before changing accounting
+on an existing node. A client restart is not an atomic placement fence.
 Restart each client after changing its configuration. Do not submit tasks
 that use a new CPU unit until all eligible clients use that unit. Keep the
 configuration unchanged while tasks that depend on it remain allocated.
