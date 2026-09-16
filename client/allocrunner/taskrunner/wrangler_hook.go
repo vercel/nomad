@@ -5,7 +5,6 @@ package taskrunner
 
 import (
 	"context"
-	"sync"
 
 	"github.com/hashicorp/go-hclog"
 	ifs "github.com/hashicorp/nomad/client/allocrunner/interfaces"
@@ -25,9 +24,6 @@ type wranglerHook struct {
 	wranglers cifs.ProcessWranglers
 	task      proclib.Task
 	log       hclog.Logger
-
-	// Serialize Prestart/Stop calls
-	lock sync.Mutex
 }
 
 func newWranglerHook(
@@ -53,14 +49,10 @@ func (*wranglerHook) Name() string {
 
 func (wh *wranglerHook) Prestart(_ context.Context, request *ifs.TaskPrestartRequest, _ *ifs.TaskPrestartResponse) error {
 	wh.log.Trace("setting up client process management", "task", wh.task)
-	wh.lock.Lock()
-	defer wh.lock.Unlock()
 	return wh.wranglers.Setup(wh.task)
 }
 
 func (wh *wranglerHook) Stop(_ context.Context, request *ifs.TaskStopRequest, _ *ifs.TaskStopResponse) error {
 	wh.log.Trace("stopping client process mangagement", "task", wh.task)
-	wh.lock.Lock()
-	defer wh.lock.Unlock()
 	return wh.wranglers.Destroy(wh.task)
 }
