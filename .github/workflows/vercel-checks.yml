@@ -1,0 +1,41 @@
+# Run 'make check' on paths ignored by test-core.yaml.
+name: ▲ Run checks
+on:
+  pull_request:
+    paths:
+      - 'demo/**'
+      - 'e2e/terraform/**'
+      - 'terraform/**'
+      - 'website/**'
+  push:
+    branches:
+      - 'main'
+      - 'release/**'
+    paths:
+      - 'demo/**'
+      - 'e2e/terraform/**'
+      - 'terraform/**'
+      - 'website/**'
+  workflow_call:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # needs tags for checkproto
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          cache: true
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Run make check
+        run: |
+          make missing
+          make bootstrap
+          make check
+permissions:
+  contents: read
+  id-token: write

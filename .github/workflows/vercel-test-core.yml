@@ -1,0 +1,149 @@
+name: ▲ Core CI Tests
+on:
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - '.changelog/**'
+      - '.tours/**'
+      - 'contributing/**'
+      - 'demo/**'
+      - 'dev/**'
+      - 'e2e/terraform/**'
+      - 'e2e/ui/**'
+      - 'integrations/**'
+      - 'pkg/**'
+      - 'scripts/**'
+      - 'terraform/**'
+      - 'ui/**'
+      - 'website/**'
+  push:
+    branches:
+      - main
+      - release/**
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - '.changelog/**'
+      - '.tours/**'
+      - 'contributing/**'
+      - 'demo/**'
+      - 'dev/**'
+      - 'e2e/terraform/**'
+      - 'e2e/ui/**'
+      - 'integrations/**'
+      - 'pkg/**'
+      - 'scripts/**'
+      - 'terraform/**'
+      - 'ui/**'
+      - 'website/**'
+
+env:
+  VERBOSE: 1
+  GOTESTARCH: amd64
+  CONSUL_VERSION: 1.20.4
+  VAULT_VERSION: 1.18.5
+  NOMAD_SLOW_TEST: 0
+  NOMAD_TEST_LOG_LEVEL: OFF
+
+jobs:
+  checks:
+    uses: ./.github/workflows/vercel-checks.yml
+  compile:
+    needs: [checks]
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          cache: ${{ contains(runner.name, 'Github Actions') }}
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Run make dev
+        run: |
+          make bootstrap
+          make dev
+  tests-api:
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          cache: true
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Run API tests
+        env:
+          GOTEST_MOD: api
+        run: |
+          make bootstrap
+          make generate-all
+          sudo sed -i 's!Defaults!#Defaults!g' /etc/sudoers
+          sudo -E env "PATH=$PATH" make dev
+          gotestsum --format=testname --rerun-fails=3 -- \
+            -timeout=20m \
+            -count=1 \
+            -race \
+            ./api/...
+  tests-groups:
+    needs: [checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        groups:
+          - nomad
+          - client
+          - command
+          - drivers
+          - quick
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          cache: ${{ contains(runner.name, 'Github Actions') }}
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Install optional dependencies
+        if: ${{ matrix.groups == 'drivers' }}
+        run: sudo apt update && sudo apt install qemu-system
+      - name: Run Matrix Tests
+        env:
+          GOTEST_GROUP: ${{matrix.groups}}
+        run: |
+          make bootstrap
+          make generate-all
+          make dev
+          sudo sed -i 's!Defaults!#Defaults!g' /etc/sudoers
+          sudo -E env "PATH=$PATH" make dev
+          PKGS=$(go run -modfile=tools/go.mod tools/missing/main.go ci/test-core.json $GOTEST_GROUP)
+          gotestsum --format=testname --rerun-fails=3 -- \
+            -skip=Consul|Envoy|Vault \
+            -timeout=20m \
+            -count=1 \
+            -race \
+            $PKGS
+  handle-failure:
+    needs:
+      - checks
+      - compile
+      - tests-api
+      - tests-groups
+    if: always() && github.event_name == 'push' && contains(needs.*.result, 'failure')
+    uses: ./.github/workflows/test-failure-notification.yml
+    secrets: inherit
+    with:
+      actor: ${{ github.triggering_actor }}
+      git-branch: ${{ github.ref_name }}
+      workflow-run-id: ${{ github.run_id }}
+      workflow-name: ${{ github.workflow }}
+
+permissions:
+  contents: read
+  id-token: write

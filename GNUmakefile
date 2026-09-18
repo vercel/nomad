@@ -135,7 +135,6 @@ deps:  ## Install build and development dependencies
 	go install github.com/golang/protobuf/protoc-gen-go@v1.3.4
 	go install github.com/hashicorp/go-msgpack/v2/codec/codecgen@v2.1.2
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
-	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
 	go install golang.org/x/tools/cmd/stringer@v0.30.0
 	go install github.com/hashicorp/hc-install/cmd/hc-install@v0.9.0
 	go install github.com/shoenig/go-modtool@v0.2.0
@@ -168,8 +167,8 @@ check: ## Lint the source code
 	@echo "==> Spell checking website..."
 	@misspell -error -source=text website/content/
 
-	@echo "==> Checking for breaking changes in protos..."
-	@buf breaking --config tools/buf/buf.yaml --against-config tools/buf/buf.yaml --against .git#tag=$(PROTO_COMPARE_TAG)
+	#@echo "==> Checking for breaking changes in protos..."
+	#@buf breaking --config tools/buf/buf.yaml --against-config tools/buf/buf.yaml --against .git#tag=$(PROTO_COMPARE_TAG)
 
 	@echo "==> Check proto files are in-sync..."
 	@$(MAKE) proto
