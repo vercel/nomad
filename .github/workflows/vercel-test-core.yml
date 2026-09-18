@@ -84,7 +84,12 @@ jobs:
           make bootstrap
           make generate-all
           sudo sed -i 's!Defaults!#Defaults!g' /etc/sudoers
-          sudo -E env "PATH=$PATH" make test-nomad-module
+          sudo -E env "PATH=$PATH" make dev
+          gotestsum --format=testname --rerun-fails=3 -- \
+            -timeout=20m \
+            -count=1 \
+            -race \
+            ./api/...
   tests-groups:
     needs: [checks]
     runs-on: ubuntu-latest
@@ -116,8 +121,14 @@ jobs:
           make generate-all
           make dev
           sudo sed -i 's!Defaults!#Defaults!g' /etc/sudoers
-          sudo -E env "PATH=$PATH" make test-nomad
-
+          sudo -E env "PATH=$PATH" make dev
+          PKGS=$(go run -modfile=tools/go.mod tools/missing/main.go ci/test-core.json $GOTEST_GROUP)
+          gotestsum --format=testname --rerun-fails=3 -- \
+            -skip=Consul|Envoy|Vault \
+            -timeout=20m \
+            -count=1 \
+            -race \
+            $PKGS
   handle-failure:
     needs:
       - checks
