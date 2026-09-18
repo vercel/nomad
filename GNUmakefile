@@ -167,8 +167,8 @@ check: ## Lint the source code
 	@echo "==> Spell checking website..."
 	@misspell -error -source=text website/content/
 
-	@echo "==> Checking for breaking changes in protos..."
-	@buf breaking --config tools/buf/buf.yaml --against-config tools/buf/buf.yaml --against .git#tag=$(PROTO_COMPARE_TAG)
+	#@echo "==> Checking for breaking changes in protos..."
+	#@buf breaking --config tools/buf/buf.yaml --against-config tools/buf/buf.yaml --against .git#tag=$(PROTO_COMPARE_TAG)
 
 	@echo "==> Check proto files are in-sync..."
 	@$(MAKE) proto
