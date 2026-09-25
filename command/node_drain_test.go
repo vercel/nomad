@@ -24,6 +24,52 @@ func TestNodeDrainCommand_Implements(t *testing.T) {
 	var _ cli.Command = &NodeDrainCommand{}
 }
 
+func TestNodeDrainCommand_DurationAware(t *testing.T) {
+	ci.Parallel(t)
+	server, client, url := testServer(t, true, nil)
+	defer server.Shutdown()
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		nodes, _, err := client.Nodes().List(nil)
+		if err != nil || len(nodes) == 0 {
+			return false, err
+		}
+		nodeID = nodes[0].ID
+		return true, nil
+	}, func(err error) { t.Fatal(err) })
+	ui := cli.NewMockUi()
+	cmd := &NodeDrainCommand{Meta: Meta{Ui: ui}}
+	code := cmd.Run([]string{"-address=" + url, "-enable", "-duration-aware", "-deadline=4h", "-backfill-buffer=1m", "-detach", nodeID})
+	must.Eq(t, 0, code, must.Sprint(ui.ErrorWriter.String()))
+	node, _, err := client.Nodes().Info(nodeID, nil)
+	must.NoError(t, err)
+	must.NotNil(t, node.DrainStrategy)
+	must.True(t, node.DrainStrategy.DurationAware)
+	must.Eq(t, time.Minute, node.DrainStrategy.BackfillBuffer)
+	must.Eq(t, 4*time.Hour, node.DrainStrategy.Deadline)
+	code = cmd.Run([]string{"-address=" + url, "-disable", "-keep-ineligible", nodeID})
+	must.Eq(t, 0, code)
+	node, _, err = client.Nodes().Info(nodeID, nil)
+	must.NoError(t, err)
+	must.Nil(t, node.DrainStrategy)
+	must.Eq(t, "ineligible", node.SchedulingEligibility)
+}
+
+func TestNodeDrainCommand_DurationAwareInvalid(t *testing.T) {
+	ci.Parallel(t)
+	for _, flags := range [][]string{
+		{"-enable", "-duration-aware", "-force"},
+		{"-enable", "-duration-aware", "-no-deadline"},
+		{"-disable", "-duration-aware"},
+		{"-enable", "-backfill-buffer=1m"},
+		{"-enable", "-duration-aware", "-backfill-buffer=-1s"},
+	} {
+		ui := cli.NewMockUi()
+		cmd := &NodeDrainCommand{Meta: Meta{Ui: ui}}
+		must.Eq(t, 1, cmd.Run(append(flags, "test-node")))
+	}
+}
+
 func TestNodeDrainCommand_Detach(t *testing.T) {
 	ci.Parallel(t)
 

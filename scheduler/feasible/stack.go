@@ -35,6 +35,7 @@ type Stack interface {
 }
 
 type SelectOptions struct {
+	ExistingAllocation      *structs.Allocation
 	PenaltyNodeIDs          map[string]struct{}
 	PreferredNodes          []*structs.Node
 	Preempt                 bool
@@ -48,6 +49,7 @@ type GenericStack struct {
 	batch  bool
 	ctx    Context
 	source *StaticIterator
+	drain  *DrainChecker
 
 	wrappedChecks        *FeasibilityWrapper
 	quota                FeasibleIterator
@@ -100,6 +102,7 @@ func (s *GenericStack) SetNodes(baseNodes []*structs.Node) {
 }
 
 func (s *GenericStack) SetJob(job *structs.Job) {
+	s.drain.job = job
 	if s.jobVersion != nil && *s.jobVersion == job.Version {
 		return
 	}
@@ -159,6 +162,11 @@ func (s *GenericStack) Select(tg *structs.TaskGroup, options *SelectOptions) *Ra
 	tgConstr := TaskGroupConstraints(tg)
 
 	// Update the parameters of iterators
+	s.drain.tg = tg
+	s.drain.existing = nil
+	if options != nil {
+		s.drain.existing = options.ExistingAllocation
+	}
 	s.taskGroupDrivers.SetDrivers(tgConstr.Drivers)
 	s.taskGroupConstraint.SetConstraints(tgConstr.Constraints)
 	s.taskGroupDevices.SetTaskGroup(tg)
@@ -210,6 +218,7 @@ func (s *GenericStack) Select(tg *structs.TaskGroup, options *SelectOptions) *Ra
 type SystemStack struct {
 	ctx    Context
 	source *StaticIterator
+	drain  *DrainChecker
 
 	jobNamespace         string
 	jobID                string
@@ -241,6 +250,7 @@ func NewSystemStack(sysbatch bool, ctx Context) *SystemStack {
 	// Create the source iterator. We visit nodes in a linear order because we
 	// have to evaluate on all nodes.
 	s.source = NewStaticIterator(ctx, nil)
+	s.drain = &DrainChecker{ctx: ctx}
 
 	// Attach the job constraints. The job is filled in later.
 	s.jobConstraint = NewConstraintChecker(ctx, nil)
@@ -279,6 +289,7 @@ func NewSystemStack(sysbatch bool, ctx Context) *SystemStack {
 		s.taskGroupSecrets,
 	}
 	avail := []FeasibilityChecker{
+		s.drain,
 		s.taskGroupHostVolumes,
 		s.taskGroupCSIVolumes,
 	}
@@ -329,6 +340,7 @@ func (s *SystemStack) SetNodes(baseNodes []*structs.Node) {
 }
 
 func (s *SystemStack) SetJob(job *structs.Job) {
+	s.drain.job = job
 	s.jobNamespace = job.Namespace
 	s.jobID = job.ID
 	s.jobConstraint.SetConstraints(job.Constraints)
@@ -351,6 +363,11 @@ func (s *SystemStack) SetSchedulerConfiguration(schedConfig *structs.SchedulerCo
 }
 
 func (s *SystemStack) Select(tg *structs.TaskGroup, options *SelectOptions) *RankedNode {
+	s.drain.tg = tg
+	s.drain.existing = nil
+	if options != nil {
+		s.drain.existing = options.ExistingAllocation
+	}
 	// Reset the binpack selector and context
 	s.scoreNorm.Reset()
 	s.ctx.Reset()
@@ -402,6 +419,7 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 	// to reduce collisions between schedulers and to do a basic load
 	// balancing across eligible nodes.
 	s.source = NewRandomIterator(ctx, nil)
+	s.drain = &DrainChecker{ctx: ctx}
 
 	// Attach the job constraints. The job is filled in later.
 	s.jobConstraint = NewConstraintChecker(ctx, nil)
@@ -440,6 +458,7 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 		s.taskGroupSecrets,
 	}
 	avail := []FeasibilityChecker{
+		s.drain,
 		s.taskGroupHostVolumes,
 		s.taskGroupCSIVolumes,
 	}

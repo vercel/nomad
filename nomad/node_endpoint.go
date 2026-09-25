@@ -928,6 +928,14 @@ func (n *Node) UpdateDrain(args *structs.NodeUpdateDrainRequest,
 	if args.NodeEvent != nil {
 		return fmt.Errorf("node event must not be set")
 	}
+	if args.DrainStrategy != nil {
+		if err := args.DrainStrategy.DrainSpec.Validate(); err != nil {
+			return err
+		}
+		// Admission closure is server-owned; an explicit drain update starts a
+		// fresh admission window against the newly computed deadline.
+		args.DrainStrategy.BackfillClosed = false
+	}
 
 	// The AuthenticatedIdentity is unexported so won't be written via
 	// Raft. Record the identity string so it can be written to LastDrain

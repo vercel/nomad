@@ -15,6 +15,22 @@ type drainerShim struct {
 	s *Server
 }
 
+func (d drainerShim) NodesDrainCloseBackfill(nodes []string) (uint64, error) {
+	args := &structs.BatchNodeUpdateDrainRequest{
+		Updates:      make(map[string]*structs.DrainUpdate, len(nodes)),
+		UpdatedAt:    time.Now().Unix(),
+		WriteRequest: structs.WriteRequest{Region: d.s.config.Region},
+	}
+	for _, node := range nodes {
+		args.Updates[node] = &structs.DrainUpdate{CloseBackfill: true}
+	}
+	response, index, err := d.s.raftApply(structs.BatchNodeUpdateDrainRequestType, args)
+	if err == nil {
+		err, _ = response.(error)
+	}
+	return index, err
+}
+
 func (d drainerShim) NodesDrainComplete(nodes []string, event *structs.NodeEvent) (uint64, error) {
 	args := &structs.BatchNodeUpdateDrainRequest{
 		Updates:      make(map[string]*structs.DrainUpdate, len(nodes)),

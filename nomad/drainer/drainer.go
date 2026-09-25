@@ -48,6 +48,7 @@ const (
 type RaftApplier interface {
 	AllocUpdateDesiredTransition(allocs map[string]*structs.DesiredTransition, evals []*structs.Evaluation) (uint64, error)
 	NodesDrainComplete(nodes []string, event *structs.NodeEvent) (uint64, error)
+	NodesDrainCloseBackfill(nodes []string) (uint64, error)
 }
 
 // NodeTracker is the interface to notify an object that is tracking draining
@@ -243,6 +244,27 @@ func (n *NodeDrainer) run(ctx context.Context) {
 // The handler detects the remaining allocations on the nodes and immediately
 // marks them for migration.
 func (n *NodeDrainer) handleDeadlinedNodes(nodes []string) {
+	var backfill []string
+	n.l.RLock()
+	for _, id := range nodes {
+		if tracked := n.nodes[id]; tracked != nil {
+			if node := tracked.GetNode(); node.DrainStrategy != nil && node.DrainStrategy.DurationAware {
+				backfill = append(backfill, id)
+			}
+		}
+	}
+	n.l.RUnlock()
+	// Fence admission before scanning allocations. Plans committed before this
+	// write are visible to the scan; stale plans committed after it are rejected.
+	for _, batch := range partitionIds(defaultMaxIdsPerTxn, backfill) {
+		if _, err := n.raft.NodesDrainCloseBackfill(batch); err != nil {
+			n.logger.Error("failed to close drain backfill", "error", err)
+			for _, id := range nodes {
+				n.deadlineNotifier.Watch(id, time.Now().Add(stateReadErrorDelay))
+			}
+			return
+		}
+	}
 	// Retrieve the set of allocations that will be force stopped.
 	var forceStop []*structs.Allocation
 	n.l.RLock()
@@ -263,7 +285,13 @@ func (n *NodeDrainer) handleDeadlinedNodes(nodes []string) {
 		forceStop = append(forceStop, allocs...)
 	}
 	n.l.RUnlock()
-	n.batchDrainAllocs(forceStop)
+	if _, err := n.batchDrainAllocs(forceStop); err != nil {
+		n.logger.Error("failed to drain deadlined allocations", "error", err)
+		for _, id := range nodes {
+			n.deadlineNotifier.Watch(id, time.Now().Add(stateReadErrorDelay))
+		}
+		return
+	}
 
 	// Create the node event
 	event := structs.NewNodeEvent().
@@ -276,6 +304,9 @@ func (n *NodeDrainer) handleDeadlinedNodes(nodes []string) {
 	for _, nodes := range partitionIds(defaultMaxIdsPerTxn, nodes) {
 		if _, err := n.raft.NodesDrainComplete(nodes, event); err != nil {
 			n.logger.Error("failed to unset drain for nodes", "error", err)
+			for _, id := range nodes {
+				n.deadlineNotifier.Watch(id, time.Now().Add(stateReadErrorDelay))
+			}
 		}
 	}
 }

@@ -83,6 +83,19 @@ type MockRaftApplierShim struct {
 	state *state.StateStore
 }
 
+func (m *MockRaftApplierShim) NodesDrainCloseBackfill(nodes []string) (uint64, error) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	index, _ := m.state.LatestIndex()
+	index++
+	updates := make(map[string]*structs.DrainUpdate, len(nodes))
+	for _, id := range nodes {
+		updates[id] = &structs.DrainUpdate{CloseBackfill: true}
+	}
+	err := m.state.BatchUpdateNodeDrain(structs.MsgTypeTestSetup, index, time.Now().Unix(), updates, nil)
+	return index, err
+}
+
 // AllocUpdateDesiredTransition mocks a write to raft as a state store update
 func (m *MockRaftApplierShim) AllocUpdateDesiredTransition(
 	allocs map[string]*structs.DesiredTransition, evals []*structs.Evaluation) (uint64, error) {

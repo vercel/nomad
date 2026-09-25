@@ -165,6 +165,19 @@ func (p *PlanBuilder) SubmitPlan(plan *structs.Plan) (*structs.PlanResult, State
 		EvalID:            plan.EvalID,
 		UpdatedAt:         now,
 	}
+	// Match the server plan applier's drain fence when committing test plans.
+	for nodeID := range plan.NodeAllocation {
+		node, err := snap.NodeByID(nil, nodeID)
+		if err != nil {
+			return result, nil, err
+		}
+		if node != nil && node.DrainStrategy != nil && node.DrainStrategy.DurationAware {
+			if req.BackfillNodeIndexes == nil {
+				req.BackfillNodeIndexes = make(map[string]uint64)
+			}
+			req.BackfillNodeIndexes[nodeID] = node.ModifyIndex
+		}
+	}
 
 	if p.noSubmit {
 		return result, nil, nil

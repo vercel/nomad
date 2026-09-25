@@ -374,6 +374,9 @@ func (s *StateStore) UpsertPlanResults(msgType structs.MessageType, index uint64
 
 	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
+	if err := validatePlanBackfill(txn, results); err != nil {
+		return err
+	}
 
 	// Mark nodes as ineligible.
 	for _, nodeID := range results.IneligibleNodes {
@@ -1172,12 +1175,18 @@ func (s *StateStore) updateNodeStatusTxn(txn *txn, req *structs.NodeUpdateStatus
 }
 
 // BatchUpdateNodeDrain is used to update the drain of a node set of nodes.
-// This is currently only called when node drain is completed by the drainer.
+// The drainer also uses this to close backfill admission before its final scan.
 func (s *StateStore) BatchUpdateNodeDrain(msgType structs.MessageType, index uint64, updatedAt int64,
 	updates map[string]*structs.DrainUpdate, events map[string]*structs.NodeEvent) error {
 	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 	for node, update := range updates {
+		if update.CloseBackfill {
+			if err := closeNodeBackfill(txn, index, node); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.updateNodeDrainImpl(txn, index, node, update.DrainStrategy, update.MarkEligible, updatedAt,
 			events[node], nil, "", true); err != nil {
 			return err

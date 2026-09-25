@@ -116,6 +116,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 	// snapshot while plans are in-flight, as the snapshot contains optimistic
 	// updates that would be lost on refresh.
 	var inFlightPlans int
+	var failedPlan bool
 
 	// Setup a worker pool with half the cores, with at least 1
 	poolSize := runtime.NumCPU() / 2
@@ -145,6 +146,7 @@ func (p *planner) planApply(maxPipelineDepth int) {
 			select {
 			case idx := <-planIndexCh:
 				inFlightPlans--
+				failedPlan = failedPlan || idx == 0
 				maxNewIndex = max(maxNewIndex, idx)
 			default:
 				goto DONE_DRAINING // no more ready
@@ -153,6 +155,20 @@ func (p *planner) planApply(maxPipelineDepth int) {
 	DONE_DRAINING:
 
 		inFlightPlans = max(inFlightPlans, 0)
+		// Apply backpressure before evaluation. On an FSM rejection, drain the
+		// whole pipeline so we can discard all optimistic state before planning
+		// more work, even under a continuously busy queue.
+		for inFlightPlans >= maxPipelineDepth || (failedPlan && inFlightPlans > 0) {
+			idx := <-planIndexCh
+			inFlightPlans--
+			failedPlan = failedPlan || idx == 0
+			maxNewIndex = max(maxNewIndex, idx)
+		}
+		if failedPlan {
+			// A rejected transaction was optimistically applied to the snapshot.
+			snap = nil
+			failedPlan = false
+		}
 		metrics.AddSample(metricPlanOutstandingApply, float32(inFlightPlans))
 
 		// Update prevPlanResultIndex and invalidate snapshot if we received
@@ -346,8 +362,18 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 		}
 	}
 
-	for _, allocList := range result.NodeAllocation {
+	for nodeID, allocList := range result.NodeAllocation {
 		req.AllocsUpdated = append(req.AllocsUpdated, allocList...)
+		node, err := snap.NodeByID(nil, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		if node != nil && node.DrainStrategy != nil && node.DrainStrategy.DurationAware {
+			if req.BackfillNodeIndexes == nil {
+				req.BackfillNodeIndexes = make(map[string]uint64)
+			}
+			req.BackfillNodeIndexes[nodeID] = node.ModifyIndex
+		}
 	}
 
 	// Set the time the alloc was applied for the first time. This can be used
@@ -410,6 +436,14 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 		// in canonical state.
 		optimisticReq := req
 		optimisticReq.EvalID = ""
+		// UpsertPlanResults canonicalizes jobs and mutates allocations. The
+		// scheduler's job can still be shared with canonical state, so the
+		// optimistic transaction must own its copies while Raft applies.
+		optimisticReq.Job = req.Job.Copy()
+		optimisticReq.AllocsUpdated = make([]*structs.Allocation, len(req.AllocsUpdated))
+		for i, alloc := range req.AllocsUpdated {
+			optimisticReq.AllocsUpdated[i] = alloc.Copy()
+		}
 
 		nextIdx := p.srv.raft.AppliedIndex() + 1
 		if err := snap.UpsertPlanResults(structs.ApplyPlanResultsRequestType, nextIdx, &optimisticReq); err != nil {
@@ -486,7 +520,13 @@ func (p *planner) asyncPlanWait(indexCh chan<- uint64, future raft.ApplyFuture,
 	defer metrics.MeasureSince(metricPlanWaitForRaft, time.Now())
 
 	// Wait for the plan to apply
-	if err := future.Error(); err != nil {
+	err := future.Error()
+	if err == nil {
+		// Raft may commit successfully while the FSM rejects a stale backfill
+		// fence. Never report these allocations as successfully placed.
+		err, _ = future.Response().(error)
+	}
+	if err != nil {
 		p.srv.logger.Error("failed to apply plan", "error", err)
 		pending.respond(nil, err)
 		// Send 0 to indicate failure
@@ -809,13 +849,37 @@ func evaluateNodePlan(snap *state.StateSnapshot, plan *structs.Plan, nodeID stri
 	if err != nil {
 		return false, "", fmt.Errorf("failed to get existing allocations for '%s': %v", nodeID, err)
 	}
+	durationAware := node.DrainStrategy != nil && node.DrainStrategy.DurationAware
+	if durationAware {
+		if len(plan.NodePreemptions[nodeID]) > 0 {
+			return false, "drain backfill cannot preempt existing allocations", nil
+		}
+		existingByID := make(map[string]*structs.Allocation, len(existingAlloc))
+		for _, alloc := range existingAlloc {
+			existingByID[alloc.ID] = alloc
+		}
+		now := time.Now()
+		for _, alloc := range plan.NodeAllocation[nodeID] {
+			updated := *alloc
+			if updated.Job == nil {
+				updated.Job = plan.Job
+			}
+			if existing := existingByID[alloc.ID]; existing != nil {
+				if !node.BackfillUpdateAllowed(existing, &updated, now) {
+					return false, "allocation update exceeds node drain time budget", nil
+				}
+			} else if updated.Job == nil || !node.CanBackfill(updated.Job, updated.Job.LookupTaskGroup(updated.TaskGroup), now) {
+				return false, "allocation exceeds node drain time budget", nil
+			}
+		}
+	}
 
 	// If nodeAllocations is a subset of the existing allocations we can continue,
 	// even if the node is not eligible, as only in-place updates or stop/evict are performed
 	if structs.AllocSubset(existingAlloc, plan.NodeAllocation[nodeID]) {
 		return true, "", nil
 	}
-	if node.SchedulingEligibility == structs.NodeSchedulingIneligible {
+	if node.SchedulingEligibility == structs.NodeSchedulingIneligible && !durationAware {
 		return false, "node is not eligible", nil
 	}
 
