@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	log "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
@@ -20,7 +21,8 @@ import (
 
 // readyNodesInDCsAndPool returns all the ready nodes in the given datacenters
 // and pool, and a mapping of each data center to the count of ready nodes.
-func readyNodesInDCsAndPool(state sstructs.State, dcs []string, pool string) ([]*structs.Node, map[string]struct{}, map[string]int, error) {
+// Backfill candidates still require a per-task-group time-budget check.
+func readyNodesInDCsAndPool(state sstructs.State, dcs []string, pool string, allowBackfill bool) ([]*structs.Node, map[string]struct{}, map[string]int, error) {
 	// Index the DCs
 	dcMap := make(map[string]int)
 
@@ -28,6 +30,7 @@ func readyNodesInDCsAndPool(state sstructs.State, dcs []string, pool string) ([]
 	ws := memdb.NewWatchSet()
 	var out []*structs.Node
 	notReady := map[string]struct{}{}
+	now := time.Now()
 
 	var iter memdb.ResultIterator
 	var err error
@@ -48,7 +51,7 @@ func readyNodesInDCsAndPool(state sstructs.State, dcs []string, pool string) ([]
 
 		// Filter on datacenter and status
 		node := raw.(*structs.Node)
-		if !node.Ready() {
+		if !node.Ready() && !(allowBackfill && node.BackfillAdmissionOpen(now)) {
 			notReady[node.ID] = struct{}{}
 			continue
 		}
@@ -839,16 +842,24 @@ func genericAllocUpdateFn(ctx feasible.Context, stack feasible.Stack, evalID str
 			return false, true, nil
 		}
 
-		// max_run_duration-only updates. This field does not affect placement
-		// or allocated resources, so we can update the alloc in place without
-		// re-running feasibility.
+		if node.DrainStrategy != nil && node.DrainStrategy.DurationAware {
+			updated := *existing
+			updated.Job = newJob
+			if !node.BackfillUpdateAllowed(existing, &updated, time.Now()) {
+				return false, true, nil
+			}
+		}
+
+		// Runtime-only updates do not change allocated resources, but must pass
+		// the duration-aware drain check above.
 		if existingTG := existing.Job.LookupTaskGroup(newTG.Name); existingTG != nil {
 			oldMax, oldOK := existing.MaxRunDuration()
 			newAlloc := existing.Copy()
 			newAlloc.EvalID = evalID
-			newAlloc.Job = nil
+			newAlloc.Job = newJob
 
 			newMax, newOK := newAlloc.MaxRunDuration()
+			newAlloc.Job = nil // use the plan's job when it is applied
 			if oldOK != newOK || oldMax != newMax {
 				return false, false, newAlloc
 			}
@@ -864,7 +875,7 @@ func genericAllocUpdateFn(ctx feasible.Context, stack feasible.Stack, evalID str
 		ctx.Plan().AppendStoppedAlloc(existing, sstructs.StatusAllocInPlace, "", "")
 
 		// Attempt to match the task group
-		option := stack.Select(newTG, &feasible.SelectOptions{AllocName: existing.Name})
+		option := stack.Select(newTG, &feasible.SelectOptions{AllocName: existing.Name, ExistingAllocation: existing})
 
 		// Pop the allocation
 		ctx.Plan().PopUpdate(existing)

@@ -687,6 +687,9 @@ type DrainUpdate struct {
 
 	// MarkEligible marks the node as eligible if removing the drain strategy.
 	MarkEligible bool
+
+	// CloseBackfill closes admission without removing the current drain strategy.
+	CloseBackfill bool
 }
 
 // NodeUpdateEligibilityRequest is used for updating the scheduling	eligibility
@@ -1106,6 +1109,9 @@ type ApplyPlanResultsRequest struct {
 	// placements for and should therefore be considered ineligible by workers
 	// to avoid retrying them repeatedly.
 	IneligibleNodes []string
+
+	// BackfillNodeIndexes fences placements against concurrent drain changes.
+	BackfillNodeIndexes map[string]uint64
 
 	// UpdatedAt represents server time of receiving request.
 	UpdatedAt int64
@@ -1904,6 +1910,13 @@ type DrainSpec struct {
 	// IgnoreSystemJobs allows systems jobs to remain on the node even though it
 	// has been marked for draining.
 	IgnoreSystemJobs bool
+
+	// DurationAware permits bounded batch work during a finite drain.
+	DurationAware bool
+
+	// BackfillBuffer is extra headroom beyond runtime and declared shutdown
+	// delays. Zero uses DefaultBackfillBuffer.
+	BackfillBuffer time.Duration
 }
 
 // DrainStrategy describes a Node's drain behavior.
@@ -1917,6 +1930,9 @@ type DrainStrategy struct {
 
 	// StartedAt is the time the drain process started
 	StartedAt time.Time
+
+	// BackfillClosed is set by the drainer before scanning remaining allocations.
+	BackfillClosed bool
 }
 
 func (d *DrainStrategy) Copy() *DrainStrategy {
@@ -1966,6 +1982,8 @@ func (d *DrainStrategy) Equal(o *DrainStrategy) bool {
 	} else if d.Deadline != o.Deadline {
 		return false
 	} else if d.IgnoreSystemJobs != o.IgnoreSystemJobs {
+		return false
+	} else if d.DurationAware != o.DurationAware || d.BackfillBuffer != o.BackfillBuffer || d.BackfillClosed != o.BackfillClosed {
 		return false
 	}
 

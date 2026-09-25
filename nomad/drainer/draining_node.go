@@ -61,6 +61,11 @@ func (n *drainingNode) IsDone() (bool, error) {
 	if n.node == nil || n.node.DrainStrategy == nil {
 		return false, fmt.Errorf("node doesn't have a drain strategy set")
 	}
+	if n.node.DrainStrategy.DurationAware {
+		// Backfill may arrive even after an empty interval. Only the deadline
+		// handler completes this mode, after fencing admission through Raft.
+		return false, nil
+	}
 
 	// Retrieve the allocs on the node
 	allocs, err := n.state.AllocsByNode(nil, n.node.ID)

@@ -182,6 +182,7 @@ func (n *Nodes) MonitorDrain(ctx context.Context, nodeID string, index uint64, i
 	outCh := make(chan *MonitorMessage, 8)
 	nodeCh := make(chan *MonitorMessage, 1)
 	allocCh := make(chan *MonitorMessage, 8)
+	nodeDone := make(chan struct{})
 
 	// Multiplex node and alloc chans onto outCh. This goroutine closes
 	// outCh when other chans have been closed.
@@ -189,10 +190,13 @@ func (n *Nodes) MonitorDrain(ctx context.Context, nodeID string, index uint64, i
 	go n.monitorDrainMultiplex(multiplexCtx, cancel, outCh, nodeCh, allocCh)
 
 	// Monitor node for updates
-	go n.monitorDrainNode(multiplexCtx, nodeID, index, nodeCh)
+	go func() {
+		n.monitorDrainNode(multiplexCtx, nodeID, index, nodeCh)
+		close(nodeDone)
+	}()
 
 	// Monitor allocs on node for updates
-	go n.monitorDrainAllocs(multiplexCtx, nodeID, ignoreSys, allocCh)
+	go n.monitorDrainAllocs(multiplexCtx, nodeID, ignoreSys, allocCh, nodeDone)
 
 	return outCh
 }
@@ -310,14 +314,15 @@ func (n *Nodes) monitorDrainNode(ctx context.Context, nodeID string,
 
 // monitorDrainAllocs emits alloc updates on allocCh and closes the channel
 // when the node has finished draining.
-func (n *Nodes) monitorDrainAllocs(ctx context.Context, nodeID string, ignoreSys bool, allocCh chan<- *MonitorMessage) {
+func (n *Nodes) monitorDrainAllocs(ctx context.Context, nodeID string, ignoreSys bool, allocCh chan<- *MonitorMessage, nodeDone <-chan struct{}) {
 	defer close(allocCh)
 
 	q := QueryOptions{AllowStale: true}
 	initial := make(map[string]*Allocation, 4)
+	nodeFinished := false
 
 	for {
-		allocs, meta, err := n.Allocations(nodeID, &q)
+		allocs, meta, err := n.Allocations(nodeID, q.WithContext(ctx))
 		if err != nil {
 			msg := Messagef(MonitorMsgLevelError, "Error monitoring allocations: %v", err)
 			select {
@@ -383,8 +388,25 @@ func (n *Nodes) monitorDrainAllocs(ctx context.Context, nodeID string, ignoreSys
 			}
 		}
 
-		// Exit if all allocs are terminal
+		// Empty intervals are not completion while backfill admission is open.
+		// After the node watcher finishes, make a final consistent allocation
+		// query so newly admitted work is included before reporting completion.
 		if runningAllocs == 0 {
+			if !nodeFinished {
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-nodeDone:
+					nodeFinished = true
+					q.AllowStale = false
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+				timer.Stop()
+				q.WaitIndex = 0
+				continue
+			}
 			msg := Messagef(MonitorMsgLevelInfo, "All allocations on node %q have stopped", nodeID)
 			select {
 			case allocCh <- msg:
@@ -732,6 +754,9 @@ type DrainStrategy struct {
 
 	// StartedAt is the time the drain process started
 	StartedAt time.Time
+
+	// BackfillClosed indicates that the server has closed backfill admission.
+	BackfillClosed bool
 }
 
 // DrainSpec describes a Node's drain behavior.
@@ -743,6 +768,14 @@ type DrainSpec struct {
 	// IgnoreSystemJobs allows systems jobs to remain on the node even though it
 	// has been marked for draining.
 	IgnoreSystemJobs bool
+
+	// DurationAware permits bounded batch work during a finite drain, keeping
+	// the drain open until its deadline even during empty intervals.
+	DurationAware bool
+
+	// BackfillBuffer adds headroom beyond runtime and declared shutdown delays.
+	// Zero uses the server default of 30 seconds.
+	BackfillBuffer time.Duration
 }
 
 func (d *DrainStrategy) Equal(o *DrainStrategy) bool {
@@ -757,6 +790,9 @@ func (d *DrainStrategy) Equal(o *DrainStrategy) bool {
 		return false
 	}
 	if d.IgnoreSystemJobs != o.IgnoreSystemJobs {
+		return false
+	}
+	if d.DurationAware != o.DurationAware || d.BackfillBuffer != o.BackfillBuffer || d.BackfillClosed != o.BackfillClosed {
 		return false
 	}
 

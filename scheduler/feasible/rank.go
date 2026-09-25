@@ -216,6 +216,9 @@ NEXTNODE:
 		if option == nil {
 			return nil
 		}
+		// Backfill uses spare capacity; do not evict the work being drained to
+		// make room for a short-lived allocation, even at a higher priority.
+		allowPreemption := iter.evict && option.Node.DrainStrategy == nil
 
 		// Get the allocations that already exist on the node + those allocs
 		// that have been placed as part of this same evaluation
@@ -315,7 +318,7 @@ NEXTNODE:
 			offer, err := netIdx.AssignPorts(ask)
 			if err != nil {
 				// If eviction is not enabled, mark this node as exhausted and continue
-				if !iter.evict {
+				if !allowPreemption {
 					iter.ctx.Metrics().ExhaustedNode(option.Node,
 						fmt.Sprintf("network: %s", err))
 					netIdx.Release()
@@ -403,7 +406,7 @@ NEXTNODE:
 				offer, err := netIdx.AssignTaskNetwork(ask)
 				if offer == nil {
 					// If eviction is not enabled, mark this node as exhausted and continue
-					if !iter.evict {
+					if !allowPreemption {
 						iter.ctx.Metrics().ExhaustedNode(option.Node,
 							fmt.Sprintf("network: %s", err))
 						netIdx.Release()
@@ -568,7 +571,7 @@ NEXTNODE:
 				// made attempts without preemption.
 
 				// If preemption is not enabled, then this node is exhausted.
-				if !iter.evict {
+				if !allowPreemption {
 					// surface err from createOffer()
 					iter.ctx.Metrics().ExhaustedNode(option.Node, fmt.Sprintf("devices: %s", err))
 					continue NEXTNODE
@@ -753,7 +756,7 @@ NEXTNODE:
 		netIdx.Release()
 		if !fit {
 			// Skip the node if evictions are not enabled
-			if !iter.evict {
+			if !allowPreemption {
 				iter.ctx.Metrics().ExhaustedNode(option.Node, dim)
 				continue
 			}
