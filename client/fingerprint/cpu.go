@@ -84,7 +84,7 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 		reservableCores = idset.From[hw.CoreID](rc)
 	}
 
-	return numalib.Scan(append(
+	top := numalib.Scan(append(
 		numalib.PlatformScanners(request.Config.CpuDisableDmidecode),
 		&numalib.ConfigScanner{
 			ReservableCores: reservableCores,
@@ -93,6 +93,15 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 			ReservedCompute: hw.MHz(reservedCompute.CpuShares),
 		},
 	))
+
+	//HACK(schmichael) Hardcode core speed as milli-cores
+	for i := range top.Cores {
+		top.Cores[i].BaseSpeed = 1000
+		top.Cores[i].MaxSpeed = 1000
+		top.Cores[i].GuessSpeed = 1000
+	}
+
+	return top
 }
 
 func (f *CPUFingerprint) setModelName(response *FingerprintResponse) {
