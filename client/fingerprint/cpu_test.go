@@ -15,6 +15,33 @@ import (
 	"github.com/shoenig/test/must"
 )
 
+func TestCPUFingerprint_HackedCoreSpeeds(t *testing.T) {
+	ci.Parallel(t)
+
+	const millicore = 1_000
+
+	f := NewCPUFingerprint(testlog.HCLogger(t))
+	request := &FingerprintRequest{
+		Config: config.DefaultConfig(),
+		Node:   &structs.Node{Attributes: make(map[string]string)},
+	}
+	var response FingerprintResponse
+	must.NoError(t, f.Fingerprint(request, &response))
+
+	top := response.NodeResources.Processors.Topology
+	nproc := top.NumCores()
+	must.Positive(t, top.NumCores())
+	must.Eq(t, hw.MHz(millicore*nproc), top.UsableCompute())
+
+	expectedMHz := hw.MHz(millicore)
+	for _, core := range top.Cores {
+		must.Eq(t, expectedMHz, core.MHz())
+		must.Eq(t, expectedMHz, core.BaseSpeed)
+		must.Eq(t, expectedMHz, core.MaxSpeed)
+		must.Eq(t, expectedMHz, core.GuessSpeed)
+	}
+}
+
 func TestCPUFingerprint_OverrideCoreSpeeds(t *testing.T) {
 	ci.Parallel(t)
 
