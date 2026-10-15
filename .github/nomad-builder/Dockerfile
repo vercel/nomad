@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  curl \
  gcc-aarch64-linux-gnu \
  software-properties-common \
+ tree \
  xz-utils \
  zip
 

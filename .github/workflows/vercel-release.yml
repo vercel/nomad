@@ -31,36 +31,19 @@ jobs:
 
   build:
     needs: version
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - goos: linux
-            arch: amd64
-            runner: ubuntu-latest
-          - goos: linux
-            arch: arm64
-            runner: ubuntu-latest
-          - goos: darwin
-            arch: arm64
-            runner: macos-latest
+        arch: [amd64, arm64]
     env:
-      TARGET: ${{ matrix.goos }}_${{ matrix.arch }}
+      TARGET: linux_${{ matrix.arch }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: .go-version
-      - name: Install Linux packaging tools
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd
-      - name: Install macOS packaging tools
-        if: runner.os == 'macOS'
-        run: command -v zstd || brew install zstd
       - name: Build dependencies
         run: make deps
       - uses: ./.github/actions/setup-js
@@ -69,7 +52,6 @@ jobs:
       # Compile and link against glibc 2.27 rather than the runner's glibc.
       # The existing builder also supplies an ARM64 cross compiler/sysroot.
       - name: Build glibc-compatible builder image
-        if: runner.os == 'Linux'
         run: |
           docker build --build-arg "GO_VERSION=$(cat .go-version)" \
             -t nomad-vercel-builder .github/nomad-builder
@@ -81,25 +63,22 @@ jobs:
           ldflags="-X github.com/hashicorp/nomad/version.GitCommit=$(git rev-parse HEAD)"
           ldflags+=" -X github.com/hashicorp/nomad/version.BuildDate=$build_date"
           ldflags+=" -X github.com/hashicorp/nomad/version.VersionMetadata=$VERSION_METADATA"
-          if [ "$RUNNER_OS" = Linux ]; then
-            docker run --rm --env CI=true --env GO_TAGS=release \
-              --volume "$PWD:/build" nomad-vercel-builder \
-              make "pkg/${TARGET}/nomad" CGO_ENABLED=1 GO_LDFLAGS="$ldflags"
-          else
-            CI=true GO_TAGS=release make "pkg/${TARGET}/nomad" \
-              CGO_ENABLED=1 GO_LDFLAGS="$ldflags"
-          fi
-      - name: Compress binary
+          make deps
+          make generate
+          docker run --rm \
+            --volume "$PWD:/build" nomad-vercel-builder \
+            make release TARGETS="$TARGET" CGO_ENABLED=1 \
+              GO_TAGS="release ui hashicorpmetrics codegen_generated" GO_LDFLAGS="$ldflags"
+      - name: Stage release ZIP
         env:
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           mkdir -p dist
-          zstd -T0 "pkg/${TARGET}/nomad" \
-            -o "dist/nomad_${RELEASE_VERSION}_${TARGET}.zst"
+          cp "pkg/${TARGET}.zip" "dist/nomad_${RELEASE_VERSION}_${TARGET}.zip"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: nomad-${{ matrix.goos }}-${{ matrix.arch }}
-          path: dist/*.zst
+          name: nomad-linux-${{ matrix.arch }}
+          path: dist/*.zip
           compression-level: 0
           if-no-files-found: error
 
@@ -118,7 +97,7 @@ jobs:
         working-directory: dist
         env:
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
-        run: sha256sum -- *.zst > "nomad_${RELEASE_VERSION}_SHA256SUMS"
+        run: sha256sum -- *.zip > "nomad_${RELEASE_VERSION}_SHA256SUMS"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,6 +112,6 @@ jobs:
             gh release create "$tag" dist/* \
               --target "$COMMIT" \
               --title "Nomad $RELEASE_VERSION" \
-              --notes "Linux amd64/arm64 and macOS arm64 builds of $GITHUB_REF_NAME at $COMMIT." \
+              --notes "Linux amd64/arm64 builds of $GITHUB_REF_NAME at $COMMIT." \
               --latest=false
           fi
