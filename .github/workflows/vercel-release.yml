@@ -64,7 +64,6 @@ jobs:
           ldflags+=" -X github.com/hashicorp/nomad/version.BuildDate=$build_date"
           ldflags+=" -X github.com/hashicorp/nomad/version.VersionMetadata=$VERSION_METADATA"
           make deps
-          make generate
           docker run --rm \
             --volume "$PWD:/build" nomad-vercel-builder \
             make release TARGETS="$TARGET" CGO_ENABLED=1 \
