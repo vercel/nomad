@@ -96,9 +96,22 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 
 	// HACK(schmichael): Use millicore accounting for cores
 	for i := range top.Cores {
-		top.Cores[i].BaseSpeed = 2000
-		top.Cores[i].MaxSpeed = 2000
-		top.Cores[i].GuessSpeed = 2000
+		var speed hw.MHz = 2000
+		if top.Cores[i].Disable {
+			// HACK(schmichael): Workaround TotalCompute including
+			// compute from disabled cores by setting their speed
+			// to 0.
+			// This makes TotalCompute == UsableCompute with
+			// TotalCompute surprisingly being the number used by
+			// the scheduler.
+			//
+			// See https://github.com/hashicorp/nomad/issues/28670
+			speed = 0
+		}
+
+		top.Cores[i].BaseSpeed = speed
+		top.Cores[i].MaxSpeed = speed
+		top.Cores[i].GuessSpeed = speed
 	}
 
 	return top
