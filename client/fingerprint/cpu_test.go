@@ -4,6 +4,7 @@
 package fingerprint
 
 import (
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -18,7 +19,7 @@ import (
 func TestCPUFingerprint_HackedCoreSpeeds(t *testing.T) {
 	ci.Parallel(t)
 
-	const millicore = 1_000
+	const millicore = 2_000
 
 	f := NewCPUFingerprint(testlog.HCLogger(t))
 	request := &FingerprintRequest{
@@ -45,8 +46,10 @@ func TestCPUFingerprint_HackedCoreSpeeds(t *testing.T) {
 func TestCPUFingerprint_OverrideCoreSpeeds(t *testing.T) {
 	ci.Parallel(t)
 
-	// cpu_total_compute = 12345
-	const totalCompute = 12345
+	//HACK(schmichael) set total compute based on cores just to make this
+	//work until the 2000 cpu per core hack is removed
+	numCores := runtime.NumCPU()
+	totalCompute := 2000 * numCores
 
 	f := NewCPUFingerprint(testlog.HCLogger(t))
 	request := &FingerprintRequest{

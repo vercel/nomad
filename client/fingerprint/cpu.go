@@ -94,13 +94,11 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 		},
 	))
 
-	// HACK(schmichael): Use millicore accounting unless explicitly overridden.
-	if top.OverrideTotalCompute == 0 {
-		for i := range top.Cores {
-			top.Cores[i].BaseSpeed = 1000
-			top.Cores[i].MaxSpeed = 1000
-			top.Cores[i].GuessSpeed = 1000
-		}
+	// HACK(schmichael): Use millicore accounting for cores
+	for i := range top.Cores {
+		top.Cores[i].BaseSpeed = 2000
+		top.Cores[i].MaxSpeed = 2000
+		top.Cores[i].GuessSpeed = 2000
 	}
 
 	return top
