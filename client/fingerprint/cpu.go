@@ -100,6 +100,9 @@ func (f *CPUFingerprint) initialize(request *FingerprintRequest) *numalib.Topolo
 		top.Cores[i].MaxSpeed = 2000
 		top.Cores[i].GuessSpeed = 2000
 	}
+	if top.OverrideTotalCompute == 0 {
+		top.OverrideTotalCompute = hw.MHz(top.UsableCores().Size() * 2000)
+	}
 
 	return top
 }
