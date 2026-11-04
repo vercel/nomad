@@ -126,7 +126,7 @@ func (f *NetworkFingerprint) Fingerprint(req *FingerprintRequest, resp *Fingerpr
 	if err != nil {
 		return err
 	}
-	nodeNetResources, err := f.createNodeNetworkResources(ifaces, disallowLinkLocal, req.Config)
+	nodeNetResources, err := f.createNodeNetworkResources(ifaces, disallowLinkLocal, req.Config, intf.Name)
 	if err != nil {
 		return err
 	}
@@ -137,20 +137,37 @@ func (f *NetworkFingerprint) Fingerprint(req *FingerprintRequest, resp *Fingerpr
 	return nil
 }
 
-func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, disallowLinkLocal bool, conf *config.Config) ([]*structs.NodeNetworkResource, error) {
+func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, disallowLinkLocal bool, conf *config.Config, defaultInterface string) ([]*structs.NodeNetworkResource, error) {
+	hostNetworks := make(map[string]*structs.ClientHostNetworkConfig, len(conf.HostNetworks))
+	for name, network := range conf.HostNetworks {
+		resolved := *network
+		if network.Interface != "" {
+			ifaceName, err := template.Parse(network.Interface)
+			if err != nil || ifaceName == "" {
+				continue
+			}
+			resolved.Interface = ifaceName
+		}
+		hostNetworks[name] = &resolved
+	}
+
 	nets := make([]*structs.NodeNetworkResource, 0)
 	for _, iface := range ifaces {
-		speed := f.linkSpeed(iface.Name)
-		if speed == 0 {
-			speed = defaultNetworkSpeed
-			f.logger.Debug("link speed could not be detected, falling back to default speed", "interface", iface.Name, "mbits", defaultNetworkSpeed)
+		eligible := iface.Name == defaultInterface
+		for _, network := range hostNetworks {
+			if network.Interface == "" || network.Interface == iface.Name {
+				eligible = true
+				break
+			}
+		}
+		if !eligible {
+			continue
 		}
 
 		newNetwork := &structs.NodeNetworkResource{
 			Mode:       "host",
 			Device:     iface.Name,
 			MacAddress: iface.HardwareAddr.String(),
-			Speed:      speed,
 		}
 		addrs, err := f.interfaceDetector.Addrs(&iface)
 		if err != nil {
@@ -174,7 +191,7 @@ func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, 
 				family = structs.NodeNetworkAF_IPv6
 			}
 
-			for _, alias := range deriveAddressAliases(iface, ip, conf) {
+			for _, alias := range deriveAddressAliases(iface, ip, hostNetworks, defaultInterface) {
 				newAddr := structs.NodeNetworkAddress{
 					Address: ip.String(),
 					Family:  family,
@@ -209,6 +226,11 @@ func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, 
 		}
 
 		if len(newNetwork.Addresses) > 0 {
+			newNetwork.Speed = f.linkSpeed(iface.Name)
+			if newNetwork.Speed == 0 {
+				newNetwork.Speed = defaultNetworkSpeed
+				f.logger.Debug("link speed could not be detected, falling back to default speed", "interface", iface.Name, "mbits", defaultNetworkSpeed)
+			}
 			nets = append(nets, newNetwork)
 		}
 	}
@@ -218,8 +240,8 @@ func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, 
 	return nets, nil
 }
 
-func deriveAddressAliases(iface net.Interface, addr net.IP, config *config.Config) (aliases []string) {
-	for name, conf := range config.HostNetworks {
+func deriveAddressAliases(iface net.Interface, addr net.IP, hostNetworks map[string]*structs.ClientHostNetworkConfig, defaultInterface string) (aliases []string) {
+	for name, conf := range hostNetworks {
 		var cidrMatch, ifaceMatch bool
 		if conf.CIDR != "" {
 			for _, cidr := range strings.Split(conf.CIDR, ",") {
@@ -237,12 +259,7 @@ func deriveAddressAliases(iface net.Interface, addr net.IP, config *config.Confi
 			cidrMatch = true
 		}
 		if conf.Interface != "" {
-			ifaceName, err := template.Parse(conf.Interface)
-			if err != nil {
-				continue
-			}
-
-			if ifaceName == iface.Name {
+			if conf.Interface == iface.Name {
 				ifaceMatch = true
 			}
 		} else {
@@ -253,15 +270,8 @@ func deriveAddressAliases(iface net.Interface, addr net.IP, config *config.Confi
 		}
 	}
 
-	if config.NetworkInterface != "" {
-		if config.NetworkInterface == iface.Name {
-			aliases = append(aliases, "default")
-		}
-	} else if ri, err := sockaddr.NewRouteInfo(); err == nil {
-		defaultIface, err := ri.GetDefaultInterfaceName()
-		if err == nil && iface.Name == defaultIface {
-			aliases = append(aliases, "default")
-		}
+	if defaultInterface == iface.Name {
+		aliases = append(aliases, "default")
 	}
 
 	return
