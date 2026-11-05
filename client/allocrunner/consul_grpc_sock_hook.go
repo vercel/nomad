@@ -17,11 +17,11 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	multierror "github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-secure-stdlib/listenerutil"
 	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/taskenv"
+	"github.com/hashicorp/nomad/helper/ipaddr"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 )
@@ -260,7 +260,7 @@ func (p *grpcSocketProxy) run() error {
 		destAddr = net.JoinHostPort(host, p.consulGRPCFallbackPort)
 	} else {
 		// GRPCAddr may be sockaddr/template string, parse it.
-		ipStr, err := listenerutil.ParseSingleIPTemplate(destAddr)
+		ipStr, err := ipaddr.ParseSingleIPTemplate(destAddr)
 		if err != nil {
 			return fmt.Errorf("unable to parse address template %q: %v", destAddr, err)
 		}
