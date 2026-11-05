@@ -13,6 +13,7 @@ import (
 
 	consulapi "github.com/hashicorp/consul/api"
 	sockaddr "github.com/hashicorp/go-sockaddr"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -193,7 +194,7 @@ func TestConsulConfig_Exec(t *testing.T) {
 func TestConsulConfig_IpTemplateParse(t *testing.T) {
 	ci.Parallel(t)
 
-	privateIp, err := sockaddr.GetPrivateIP()
+	privateIP, err := sockaddr.GetPrivateIP()
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -203,7 +204,25 @@ func TestConsulConfig_IpTemplateParse(t *testing.T) {
 		expectErr   bool
 	}{
 		{name: "string address keeps working", tmpl: "10.0.1.0:8500", expectedOut: "10.0.1.0:8500", expectErr: false},
-		{name: "single ip sock-addr template", tmpl: "{{ GetPrivateIP }}:8500", expectedOut: privateIp + ":8500", expectErr: false},
+		{name: "hostname", tmpl: "consul.example.test:8500", expectedOut: "consul.example.test:8500"},
+		{name: "hostname without port", tmpl: "consul.example.test", expectedOut: "consul.example.test"},
+		{name: "IPv6", tmpl: "[2001:0DB8::1]:8500", expectedOut: "[2001:0DB8::1]:8500"},
+		{name: "IPv6 without port", tmpl: "2001:db8::1", expectedOut: "2001:db8::1"},
+		{name: "single ip sock-addr template", tmpl: "{{ GetPrivateIP }}:8500", expectedOut: privateIP + ":8500"},
+		{name: "constant address template", tmpl: `{{ printf "192.0.2.1" }}:8500`, expectedOut: "192.0.2.1:8500"},
+		{name: "hostname template", tmpl: `{{ printf "consul.example.test:8500" }}`, expectedOut: "consul.example.test:8500"},
+		{name: "IPv6 template", tmpl: `{{ printf "[2001:db8::1]:8500" }}`, expectedOut: "[2001:db8::1]:8500"},
+		{name: "empty address uses default", tmpl: "", expectedOut: consulapi.DefaultConfig().Address},
+		{name: "empty template", tmpl: `{{ printf "" }}`, expectedOut: ""},
+		{name: "tab and newline trimmed", tmpl: "\t192.0.2.1:8500\n", expectedOut: "192.0.2.1:8500"},
+		{name: "whitespace only", tmpl: "\t\n", expectedOut: ""},
+		{name: "embedded tab preserved", tmpl: "192.0.2.1\t192.0.2.2:8500", expectedOut: "192.0.2.1\t192.0.2.2:8500"},
+		{name: "embedded newline preserved", tmpl: "192.0.2.1\n192.0.2.2:8500", expectedOut: "192.0.2.1\n192.0.2.2:8500"},
+		{name: "leading space", tmpl: " 192.0.2.1:8500", expectErr: true},
+		{name: "trailing space", tmpl: "192.0.2.1:8500 ", expectErr: true},
+		{name: "only space", tmpl: " ", expectErr: true},
+		{name: "malformed template", tmpl: "{{", expectErr: true},
+		{name: "multiple template addresses", tmpl: `{{ printf "192.0.2.1:8500 192.0.2.2:8500" }}`, expectErr: true},
 		{name: "multi ip sock-addr template", tmpl: "10.0.1.0 10.0.1.1:8500", expectedOut: "", expectErr: true},
 	}
 
@@ -216,11 +235,11 @@ func TestConsulConfig_IpTemplateParse(t *testing.T) {
 			out, err := conf.ApiConfig()
 
 			if tc.expectErr {
-				require.Error(t, err)
+				must.ErrorContains(t, err, "unable to parse address template")
 				return
 			}
-			require.NoError(t, err)
-			require.Equal(t, tc.expectedOut, out.Address)
+			must.NoError(t, err)
+			must.Eq(t, tc.expectedOut, out.Address)
 		})
 	}
 }

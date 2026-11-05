@@ -11,8 +11,8 @@ import (
 
 	log "github.com/hashicorp/go-hclog"
 	sockaddr "github.com/hashicorp/go-sockaddr"
-	"github.com/hashicorp/go-sockaddr/template"
 	"github.com/hashicorp/nomad/client/config"
+	"github.com/hashicorp/nomad/helper/ipaddr"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -142,7 +142,7 @@ func (f *NetworkFingerprint) createNodeNetworkResources(ifaces []net.Interface, 
 	for name, network := range conf.HostNetworks {
 		resolved := *network
 		if network.Interface != "" {
-			ifaceName, err := template.Parse(network.Interface)
+			ifaceName, err := ipaddr.ParseTemplate(network.Interface)
 			if err != nil || ifaceName == "" {
 				continue
 			}

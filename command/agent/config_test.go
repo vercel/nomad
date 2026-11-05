@@ -1086,6 +1086,176 @@ func TestConfig_normalizeAddrs_MultipleInterfaces(t *testing.T) {
 	}
 }
 
+func TestConfig_normalizeAddrs_LiteralsAndTemplates(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []struct {
+		name      string
+		bind      string
+		http      string
+		advertise *AdvertiseAddrs
+		wantBind  string
+		wantHTTP  string
+		wantAddrs *NormalizedAddrs
+		wantAdv   *AdvertiseAddrs
+	}{
+		{
+			name:      "IPv4 multiple HTTP binds",
+			bind:      "192.0.2.1",
+			http:      "192.0.2.2 192.0.2.3 192.0.2.2",
+			advertise: &AdvertiseAddrs{RPC: "192.0.2.4:9000"},
+			wantBind:  "192.0.2.1",
+			wantHTTP:  "192.0.2.2 192.0.2.3",
+			wantAddrs: &NormalizedAddrs{
+				HTTP: []string{"192.0.2.2:4646", "192.0.2.3:4646"},
+				RPC:  "192.0.2.1:4647", Serf: "192.0.2.1:4648",
+			},
+			wantAdv: &AdvertiseAddrs{HTTP: "192.0.2.2:4646", RPC: "192.0.2.4:9000", Serf: "192.0.2.1:4648"},
+		},
+		{
+			name:      "IPv6 canonicalization and mixed HTTP binds",
+			bind:      "2001:0DB8:0:0::1",
+			http:      "2001:0DB8::2 192.0.2.2 2001:0DB8::2",
+			advertise: &AdvertiseAddrs{HTTP: "[2001:0DB8::3]:9000", RPC: "2001:0DB8::4"},
+			wantBind:  "2001:db8::1",
+			wantHTTP:  "2001:db8::2 192.0.2.2",
+			wantAddrs: &NormalizedAddrs{
+				HTTP: []string{"[2001:db8::2]:4646", "192.0.2.2:4646"},
+				RPC:  "[2001:db8::1]:4647", Serf: "[2001:db8::1]:4648",
+			},
+			wantAdv: &AdvertiseAddrs{HTTP: "[2001:db8::3]:9000", RPC: "[2001:db8::4]:4647", Serf: "[2001:db8::1]:4648"},
+		},
+	}
+	for _, tc := range cases {
+		for _, templated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/template=%t", tc.name, templated), func(t *testing.T) {
+				ci.Parallel(t)
+				render := func(value string) string {
+					if templated && value != "" {
+						return fmt.Sprintf("{{ printf %q }}", value)
+					}
+					return value
+				}
+				c := &Config{
+					BindAddr:       render(tc.bind),
+					Ports:          &Ports{HTTP: 4646, RPC: 4647, Serf: 4648},
+					Addresses:      &Addresses{HTTP: render(tc.http), RPC: render(tc.bind), Serf: render(tc.bind)},
+					AdvertiseAddrs: &AdvertiseAddrs{HTTP: render(tc.advertise.HTTP), RPC: render(tc.advertise.RPC)},
+					Server:         &ServerConfig{Enabled: true},
+				}
+				must.NoError(t, c.normalizeAddrs())
+				must.Eq(t, tc.wantBind, c.BindAddr)
+				must.Eq(t, &Addresses{HTTP: tc.wantHTTP, RPC: tc.wantBind, Serf: tc.wantBind}, c.Addresses)
+				must.Eq(t, tc.wantAddrs, c.normalizedAddrs)
+				must.Eq(t, tc.wantAdv, c.AdvertiseAddrs)
+			})
+		}
+	}
+}
+
+func TestConfig_normalizeAddrs_SingleAddressValidation(t *testing.T) {
+	ci.Parallel(t)
+
+	fields := []struct {
+		name string
+		set  func(*Config, string)
+	}{
+		{"bind", func(c *Config, s string) { c.BindAddr = s }},
+		{"RPC bind", func(c *Config, s string) { c.Addresses.RPC = s }},
+		{"Serf bind", func(c *Config, s string) { c.Addresses.Serf = s }},
+		{"HTTP advertise", func(c *Config, s string) { c.AdvertiseAddrs.HTTP = s }},
+		{"RPC advertise", func(c *Config, s string) { c.AdvertiseAddrs.RPC = s }},
+		{"Serf advertise", func(c *Config, s string) { c.AdvertiseAddrs.Serf = s }},
+	}
+	cases := []struct {
+		name  string
+		input string
+		err   string
+	}{
+		{"literal", "192.0.2.1", ""},
+		{"tab and newline trimmed", "\t192.0.2.1\n", ""},
+		{"template", `{{ printf "192.0.2.1" }}`, ""},
+		{"leading space", " 192.0.2.1", "multiple addresses found"},
+		{"trailing space", "192.0.2.1 ", "multiple addresses found"},
+		{"multiple addresses", "192.0.2.1 192.0.2.2", "multiple addresses found"},
+		{"multiple template addresses", `{{ printf "192.0.2.1 192.0.2.2" }}`, "multiple addresses found"},
+		{"malformed template", "{{", "unable to parse template"},
+	}
+	for _, field := range fields {
+		for _, tc := range cases {
+			t.Run(field.name+"/"+tc.name, func(t *testing.T) {
+				ci.Parallel(t)
+				c := &Config{
+					BindAddr:  "192.0.2.1",
+					Ports:     &Ports{HTTP: 4646, RPC: 4647, Serf: 4648},
+					Addresses: &Addresses{}, AdvertiseAddrs: &AdvertiseAddrs{},
+					Server: &ServerConfig{Enabled: true},
+				}
+				field.set(c, tc.input)
+				err := c.normalizeAddrs()
+				if tc.err != "" {
+					must.ErrorContains(t, err, tc.err)
+					return
+				}
+				must.NoError(t, err)
+				must.Eq(t, "192.0.2.1", c.BindAddr)
+				must.Eq(t, &Addresses{HTTP: "192.0.2.1", RPC: "192.0.2.1", Serf: "192.0.2.1"}, c.Addresses)
+				must.Eq(t, &AdvertiseAddrs{HTTP: "192.0.2.1:4646", RPC: "192.0.2.1:4647", Serf: "192.0.2.1:4648"}, c.AdvertiseAddrs)
+			})
+		}
+	}
+}
+
+func TestConfig_normalizeAddrs_TemplateLoopback(t *testing.T) {
+	ci.Parallel(t)
+
+	for _, ip := range []string{"127.0.0.1", "::1"} {
+		for _, dev := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dev=%t", ip, dev), func(t *testing.T) {
+				ci.Parallel(t)
+				c := &Config{
+					BindAddr:  fmt.Sprintf("{{ printf %q }}", ip),
+					Ports:     &Ports{HTTP: 4646, RPC: 4647, Serf: 4648},
+					Addresses: &Addresses{}, AdvertiseAddrs: &AdvertiseAddrs{},
+					Server: &ServerConfig{Enabled: true}, DevMode: dev,
+				}
+				err := c.normalizeAddrs()
+				if !dev {
+					must.ErrorContains(t, err, "Defaulting advertise to localhost is unsafe")
+					return
+				}
+				must.NoError(t, err)
+				must.Eq(t, &AdvertiseAddrs{
+					HTTP: net.JoinHostPort(ip, "4646"), RPC: net.JoinHostPort(ip, "4647"), Serf: net.JoinHostPort(ip, "4648"),
+				}, c.AdvertiseAddrs)
+			})
+		}
+	}
+}
+
+func TestNormalizeBind_EmptyAndWhitespace(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty literal uses bind", "", "192.0.2.1"},
+		{"empty template", `{{ printf "" }}`, ""},
+		{"whitespace only", "\t\n", ""},
+		{"trim tab and newline", "\t192.0.2.2\n", "192.0.2.2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ci.Parallel(t)
+			got, err := normalizeBind(tc.input, "192.0.2.1")
+			must.NoError(t, err)
+			must.Eq(t, tc.want, got)
+		})
+	}
+}
+
 func TestConfig_normalizeAddrs(t *testing.T) {
 	ci.Parallel(t)
 
@@ -1233,6 +1403,38 @@ func TestConfig_templateNetworkInterface(t *testing.T) {
 			expectErr:         false,
 		},
 		{
+			name: "literal interface whitespace",
+			clientConfig: &ClientConfig{
+				Enabled:          true,
+				NetworkInterface: "\t " + iface.Name + " \n",
+			},
+			expectedInterface: iface.Name,
+		},
+		{
+			name: "constant interface template",
+			clientConfig: &ClientConfig{
+				Enabled:          true,
+				NetworkInterface: fmt.Sprintf("{{ printf %q }}", iface.Name),
+			},
+			expectedInterface: iface.Name,
+		},
+		{
+			name: "invalid literal interface",
+			clientConfig: &ClientConfig{
+				Enabled:          true,
+				NetworkInterface: "nomad-no-iface",
+			},
+			expectErr: true,
+		},
+		{
+			name: "whitespace only interface",
+			clientConfig: &ClientConfig{
+				Enabled:          true,
+				NetworkInterface: "\t \n",
+			},
+			expectErr: true,
+		},
+		{
 			name: "valid interface",
 			clientConfig: &ClientConfig{
 				Enabled:          true,
@@ -1271,6 +1473,7 @@ func TestConfig_templateNetworkInterface(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ci.Parallel(t)
 			c := &Config{
 				BindAddr: "127.0.0.1",
 				Ports: &Ports{
@@ -1926,12 +2129,24 @@ func TestParseMultipleIPTemplates(t *testing.T) {
 			expectedOut: []string{"10.0.0.1", "127.0.0.1", "10.0.0.2"},
 			expectErr:   false,
 		},
+		{name: "empty literal", tmpl: "", expectedOut: []string{""}},
+		{name: "empty template", tmpl: `{{ printf "" }}`, expectedOut: []string{""}},
+		{name: "ASCII spaces preserved", tmpl: " 192.0.2.1  ", expectedOut: []string{"", "192.0.2.1"}},
+		{name: "tabs and newlines preserved", tmpl: "\t192.0.2.1\n", expectedOut: []string{"\t192.0.2.1\n"}},
+		{name: "tab is not a separator", tmpl: "192.0.2.1\t192.0.2.2", expectedOut: []string{"192.0.2.1\t192.0.2.2"}},
+		{name: "newline is not a separator", tmpl: "192.0.2.1\n192.0.2.2", expectedOut: []string{"192.0.2.1\n192.0.2.2"}},
+		{name: "malformed template", tmpl: "{{", expectErr: true},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ci.Parallel(t)
 			out, err := parseMultipleIPTemplate(tc.tmpl)
-			require.NoError(t, err)
-			require.Equal(t, tc.expectedOut, out)
+			if tc.expectErr {
+				must.ErrorContains(t, err, "Unable to parse address template")
+				return
+			}
+			must.NoError(t, err)
+			must.Eq(t, tc.expectedOut, out)
 		})
 	}
 }
