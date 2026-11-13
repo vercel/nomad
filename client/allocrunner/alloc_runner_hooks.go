@@ -10,7 +10,6 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	clientconfig "github.com/hashicorp/nomad/client/config"
-	"github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -112,37 +111,37 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 		newIdentityHook(hookLogger, ar.widmgr),
 		newAllocDirHook(hookLogger, ar.allocDir),
 		newMaxRunDurationHook(hookLogger, alloc, ar.clientBaseLabels, ar.EnforceMaxRunDurationTimeout),
-		newConsulHook(consulHookConfig{
-			alloc:                   ar.alloc,
-			allocdir:                ar.allocDir,
-			widmgr:                  ar.widmgr,
-			consulConfigs:           ar.clientConfig.GetConsulConfigs(hookLogger),
-			consulClientConstructor: consul.NewConsulClientFactory(config),
-			hookResources:           ar.hookResources,
-			logger:                  hookLogger,
-			db:                      ar.stateDB,
-		}),
+		//newConsulHook(consulHookConfig{
+		//	alloc:                   ar.alloc,
+		//	allocdir:                ar.allocDir,
+		//	widmgr:                  ar.widmgr,
+		//	consulConfigs:           ar.clientConfig.GetConsulConfigs(hookLogger),
+		//	consulClientConstructor: consul.NewConsulClientFactory(config),
+		//	hookResources:           ar.hookResources,
+		//	logger:                  hookLogger,
+		//	db:                      ar.stateDB,
+		//}),
 		newUpstreamAllocsHook(hookLogger, ar.prevAllocWatcher),
 		newDiskMigrationHook(hookLogger, ar.prevAllocMigrator, ar.allocDir),
 		// newCPUPartsHook(hookLogger, ar.partitions, alloc),
 		newAllocHealthWatcherHook(hookLogger, alloc, hs, ar.Listener(), ar.consulServicesHandler, ar.checkStore),
 		newNetworkHook(hookLogger, ns, alloc, nm, nc, ar),
-		newGroupServiceHook(groupServiceHookConfig{
-			alloc:             alloc,
-			providerNamespace: alloc.ServiceProviderNamespace(),
-			serviceRegWrapper: ar.serviceRegWrapper,
-			hookResources:     ar.hookResources,
-			restarter:         ar,
-			networkStatus:     ar,
-			logger:            hookLogger,
-			shutdownDelayCtx:  ar.shutdownDelayCtx,
-		}),
-		newConsulGRPCSocketHook(hookLogger, alloc, ar.allocDir,
-			config.GetConsulConfigs(ar.logger), config.Node.Attributes),
-		newConsulHTTPSocketHook(hookLogger, alloc, ar.allocDir,
-			config.GetConsulConfigs(ar.logger)),
-		newCSIHook(alloc, hookLogger, ar.csiManager, ar.rpcClient, ar, ar.hookResources, ar.clientConfig.Node.SecretID),
-		newChecksHook(hookLogger, alloc, ar.checkStore, ar),
+		//newGroupServiceHook(groupServiceHookConfig{
+		//	alloc:             alloc,
+		//	providerNamespace: alloc.ServiceProviderNamespace(),
+		//	serviceRegWrapper: ar.serviceRegWrapper,
+		//	hookResources:     ar.hookResources,
+		//	restarter:         ar,
+		//	networkStatus:     ar,
+		//	logger:            hookLogger,
+		//	shutdownDelayCtx:  ar.shutdownDelayCtx,
+		//}),
+		//newConsulGRPCSocketHook(hookLogger, alloc, ar.allocDir,
+		//	config.GetConsulConfigs(ar.logger), config.Node.Attributes),
+		//newConsulHTTPSocketHook(hookLogger, alloc, ar.allocDir,
+		//	config.GetConsulConfigs(ar.logger)),
+		//newCSIHook(alloc, hookLogger, ar.csiManager, ar.rpcClient, ar, ar.hookResources, ar.clientConfig.Node.SecretID),
+		//newChecksHook(hookLogger, alloc, ar.checkStore, ar),
 	}
 	if config.ExtraAllocHooks != nil {
 		ar.runnerHooks = append(ar.runnerHooks, config.ExtraAllocHooks...)
