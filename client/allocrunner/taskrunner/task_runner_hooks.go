@@ -64,7 +64,7 @@ func (tr *TaskRunner) initHooks() {
 		newDynamicUsersHook(tr.killCtx, tr.driverCapabilities.DynamicWorkloadUsers, tr.logger, tr.users),
 		newTaskDirHook(tr, hookLogger),
 		newIdentityHook(tr, hookLogger),
-		newConsulHook(hookLogger, tr),
+		//newConsulHook(hookLogger, tr),
 	}
 	// If Vault is enabled, add the hook
 	if task.Vault != nil && tr.vaultClientFunc != nil {
@@ -142,14 +142,14 @@ func (tr *TaskRunner) initHooks() {
 
 	// Always add the service hook. A task with no services on initial registration
 	// may be updated to include services, which must be handled with this hook.
-	tr.runnerHooks = append(tr.runnerHooks, newServiceHook(serviceHookConfig{
-		alloc:             tr.Alloc(),
-		task:              tr.Task(),
-		serviceRegWrapper: tr.serviceRegWrapper,
-		restarter:         tr,
-		hookResources:     tr.allocHookResources,
-		logger:            hookLogger,
-	}))
+	//tr.runnerHooks = append(tr.runnerHooks, newServiceHook(serviceHookConfig{
+	//	alloc:             tr.Alloc(),
+	//	task:              tr.Task(),
+	//	serviceRegWrapper: tr.serviceRegWrapper,
+	//	restarter:         tr,
+	//	hookResources:     tr.allocHookResources,
+	//	logger:            hookLogger,
+	//}))
 
 	// If this is a Connect sidecar proxy (or a Connect Native) service,
 	// add the sidsHook for requesting a Service Identity token (if ACLs).
@@ -190,13 +190,13 @@ func (tr *TaskRunner) initHooks() {
 	// Always add the script checks hook. A task with no script check hook on
 	// initial registration may be updated to include script checks, which must
 	// be handled with this hook.
-	tr.runnerHooks = append(tr.runnerHooks, newScriptCheckHook(scriptCheckHookConfig{
-		alloc:           tr.Alloc(),
-		task:            tr.Task(),
-		consul:          tr.consulServiceClient,
-		logger:          hookLogger,
-		arHookResources: tr.allocHookResources,
-	}))
+	//tr.runnerHooks = append(tr.runnerHooks, newScriptCheckHook(scriptCheckHookConfig{
+	//	alloc:           tr.Alloc(),
+	//	task:            tr.Task(),
+	//	consul:          tr.consulServiceClient,
+	//	logger:          hookLogger,
+	//	arHookResources: tr.allocHookResources,
+	//}))
 
 	// If this task has a pause schedule, initialize the pause (Enterprise)
 	if task.Schedule != nil {
