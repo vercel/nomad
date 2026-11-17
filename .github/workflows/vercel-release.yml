@@ -68,7 +68,8 @@ jobs:
             --volume "$PWD:/build" nomad-vercel-builder \
             make release TARGETS="$TARGET" CGO_ENABLED=1 \
               GO_TAGS="release ui hashicorpmetrics codegen_generated" GO_LDFLAGS="$ldflags"
-      - name: Stage release ZIP
+      # ZIPs are internal build artifacts; public releases contain signed tars.
+      - name: Stage build ZIP
         env:
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
@@ -83,20 +84,53 @@ jobs:
 
   release:
     needs: [version, build]
+    if: github.repository == 'vercel/nomad' && github.event_name == 'push' && github.ref == 'refs/heads/vercel/main-2.0.5'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: nomad-*
           merge-multiple: true
-          path: dist
-      - name: Generate checksums
-        working-directory: dist
+          path: inputs
+      - uses: sigstore/cosign-installer@b9c35392b7c1401bcc77d30c9b07cf4b1c7a7b07
+        with:
+          cosign-release: v3.1.4
+      - name: Sign and package release binaries
+        shell: bash
         env:
           RELEASE_VERSION: ${{ needs.version.outputs.version }}
-        run: sha256sum -- *.zip > "nomad_${RELEASE_VERSION}_SHA256SUMS"
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            stage=$(mktemp -d "$RUNNER_TEMP/nomad-sign.XXXXXX")
+            archive="$GITHUB_WORKSPACE/inputs/nomad_${RELEASE_VERSION}_linux_${arch}.zip"
+            unzip -p "$archive" nomad > "$stage/nomad"
+            unzip -p "$archive" LICENSE.txt > "$stage/LICENSE.txt"
+            chmod 755 "$stage/nomad"
+            jq -n --arg version "$RELEASE_VERSION" --arg arch "$arch" \
+              --arg commit "$COMMIT" \
+              '{version: $version, os: "linux", arch: $arch, commit: $commit}' \
+              > "$stage/release.json"
+            (
+              cd "$stage" || exit 1
+              sha256sum nomad LICENSE.txt release.json > manifest.sha256
+              cosign sign-blob --yes --bundle manifest.sha256.sigstore.json manifest.sha256
+              cosign verify-blob --bundle manifest.sha256.sigstore.json \
+                --certificate-identity 'https://github.com/vercel/nomad/.github/workflows/vercel-release.yml@refs/heads/vercel/main-2.0.5' \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --certificate-github-workflow-repository vercel/nomad \
+                --certificate-github-workflow-trigger push \
+                --certificate-github-workflow-sha "$COMMIT" manifest.sha256
+              sha256sum --check manifest.sha256
+            )
+            tar -cf "dist/nomad-${RELEASE_VERSION}-${arch}.tar" -C "$stage" \
+              nomad LICENSE.txt release.json manifest.sha256 manifest.sha256.sigstore.json
+            rm -rf "$stage"
+          done
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,9 +140,9 @@ jobs:
         run: |
           tag="v$RELEASE_VERSION"
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
+            gh release upload "$tag" dist/*.tar --clobber
           else
-            gh release create "$tag" dist/* \
+            gh release create "$tag" dist/*.tar \
               --target "$COMMIT" \
               --title "Nomad $RELEASE_VERSION" \
               --notes "Linux amd64/arm64 builds of $GITHUB_REF_NAME at $COMMIT." \
